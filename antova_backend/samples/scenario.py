@@ -369,8 +369,8 @@ COMPLIANCE_TOPICS = [
 ]
 
 
-def _filler(pool: str, page: int, count: int) -> list[tuple[str, str]]:
-    sentences = FILLER[pool]
+def _filler(pool: str, page: int, count: int, filler: dict | None = None) -> list[tuple[str, str]]:
+    sentences = (filler or FILLER)[pool]
     return [("p", sentences[(page + i) % len(sentences)]) for i in range(count)]
 
 
@@ -398,7 +398,7 @@ def _compliance_rows(vendor: Vendor) -> list[tuple[str, str]]:
 
 def _build(page_count: int, sections: dict, evidence: list[Ev], title_blocks: list[tuple[str, str]],
            compliance_heading: str | None = None, compliance_rows: list | None = None,
-           drawing_code: str | None = None) -> list[Page]:
+           drawing_code: str | None = None, filler: dict | None = None) -> list[Page]:
     pages: list[Page] = []
     pool = "general"
     for number in range(1, page_count + 1):
@@ -419,11 +419,11 @@ def _build(page_count: int, sections: dict, evidence: list[Ev], title_blocks: li
             page.blocks.extend(("row", e.text) for e in here)
             page.blocks.extend(compliance_rows or [])
         elif pool == "compliance":
-            page.blocks.extend(_filler("general", number, 3))
+            page.blocks.extend(_filler("general", number, 3, filler))
         else:
             # The body always opens with an ordinary sentence, so a page
             # without a heading never looks like a new section.
-            fill = _filler(pool, number, 3 if here else 4)
+            fill = _filler(pool, number, 3 if here else 4, filler)
             page.blocks.extend(fill[:1] + [("p", e.text) for e in here] + fill[1:])
         if pool == "drawing" and drawing_code:
             page.drawing = f"Drawing {drawing_code} - sheet {number - 9}"

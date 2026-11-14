@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, PARAMETERS_BY_CLASS, ParameterDef, parameters_for
 from antova_ingest.parse import MIN_QUOTE_WORDS, citation_for_span, normalize, page_sentences, words_text
 from antova_ingest.types import Citation, FieldKind, ParsedDocument
-from antova_ingest.values import NEGATIVE_CONTEXT, clauses
+from antova_ingest.values import NEGATIVE_CONTEXT, NO_LD, clauses
 
 _NUMBER = r"\d(?:[\d.,]*\d)?"
 # What a value of each kind looks like, loosely: enough to say "this sentence states one".
@@ -39,7 +39,8 @@ SIGNALS: dict[FieldKind, re.Pattern] = {
                            r"delivered duty paid|free carrier", re.IGNORECASE),
     "months": re.compile(r"\d+\s*-?\s*months?\b", re.IGNORECASE),
     "lead_time": re.compile(r"\d+(?:\.\d+)?\s*(?:-|to)?\s*(?:\d+(?:\.\d+)?)?\s*(?:weeks?|wks?|months?|days?)\b", re.IGNORECASE),
-    "percent": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)|no liquidated|no LDs?\b|LDs? (?:excluded|waived)", re.IGNORECASE),
+    # A percentage, or the wording that says liquidated damages do not apply (the parser reads that as 0).
+    "percent": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)|" + NO_LD.pattern, re.IGNORECASE),
     "money_cap": re.compile(r"(?:€|\$|£|\b(?:EUR|USD|GBP|CHF)\b)\s?\d|\d\s?(?:€|\$|£|EUR|USD|GBP|CHF)\b"),
     "altitude": re.compile(_NUMBER + r"\s*(?:m|ft)\b"),
     "scope": re.compile(r"\bincluded?\b|\bincludes\b|\bincluding\b|excluded|not included|separately|by others|optional|"

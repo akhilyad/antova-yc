@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from antova_ingest.extract import LocateOutcome, LocateResponse
-from antova_ingest.ontology import PARAMETERS
+from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, parameters_for
 from antova_ingest.types import ParsedDocument
 
 PACK = Path(__file__).resolve().parents[1] / "samples" / "TENDER-2026-402"
@@ -40,5 +40,6 @@ class AnswerKeyLocator:
             # with the pages searched (an ideal locator has read every page).
             located = {c["param_id"] for c in data["candidates"]}
             data["not_stated"] = [{"param_id": p.id, "pages_searched": [page.number for page in doc.pages]}
-                                  for p in PARAMETERS if p.id not in located]
+                                  for p in parameters_for(self.expected.get("equipment_class", DEFAULT_EQUIPMENT_CLASS))
+                                  if p.id not in located]
         return LocateOutcome(LocateResponse.model_validate(data), 0, 0, False)

@@ -29,11 +29,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from samples import generate_sample_pack, scenario, scenario_417
+from samples import generate_sample_pack, scenario, scenario_417, scenario_418
 from samples.scenario import DocumentSpec
 
 SAMPLES_DIR = Path(__file__).resolve().parent
 BASE_TENDER_ID = scenario.TENDER_ID
+EXTENDED_BASE_TENDER_ID = scenario_418.TENDER_ID
 
 
 class MutationError(ValueError):
@@ -126,9 +127,12 @@ def operator(fn: Operator) -> Operator:
     return fn
 
 
-def base_pack() -> Pack:
-    """TENDER-2026-402 as data: a fresh copy on every call."""
-    return Pack(docs=copy.deepcopy(scenario.documents()), manifest=scenario.manifest(), expected=scenario.expected())
+def base_pack(base: str = BASE_TENDER_ID) -> Pack:
+    """TENDER-2026-402 (or, for base TENDER-2026-418, the extended pack) as data: a fresh copy on every call."""
+    module = {BASE_TENDER_ID: scenario, EXTENDED_BASE_TENDER_ID: scenario_418}.get(base)
+    if module is None:
+        raise MutationError(f"unknown base pack {base!r}")
+    return Pack(docs=copy.deepcopy(module.documents()), manifest=module.manifest(), expected=module.expected())
 
 
 # --- Operators ------------------------------------------------------------------
@@ -286,9 +290,11 @@ def _readable_bids(pack: Pack) -> list[str]:
 def _blank_cells(pack: Pack, vendor_id: str, param_ids: list[str]) -> None:
     """Nothing could be read for these cells: manual inspection, no citation, no value, no adder."""
     for param_id in param_ids:
-        pack.cell(vendor_id, param_id).update({
+        cell = pack.cell(vendor_id, param_id)
+        cell.update({
             "status": "MANUAL_INSPECTION_REQUIRED", "page": None, "quote": None, "values": {},
             "secondary_page": None, "adder": "0.00"})
+        cell.pop("pricing_status", None)  # nothing was read, so there is nothing to price or leave unpriced
     adders = sum(float(c["adder"]) for c in pack.expected["cells"][vendor_id].values())
     vendor = pack.expected["vendors"][vendor_id]
     vendor["total_adders"] = f"{adders:.2f}"
@@ -434,26 +440,121 @@ def injection_text(pack: Pack, rng: random.Random) -> None:
 
 # --- Building and writing ---------------------------------------------------------
 
-def tender_id_for(operators: list[str], seed: int) -> str:
+
+# --- Operators for the extended pack (TENDER-2026-418) -----------------------------
+#
+# These need PARAM-09..14 and apply only to that base. Each one changes a document and its answer
+# key together, like the operators above.
+
+EXTENDED_OPERATORS: dict[str, Operator] = {}
+
+
+def extended_operator(fn: Operator) -> Operator:
+    EXTENDED_OPERATORS[fn.__name__] = fn
+    return fn
+
+
+def _need_extended(pack: Pack, vendor_id: str, param_id: str) -> None:
+    if param_id not in pack.expected["cells"].get(vendor_id, {}):
+        raise MutationError(f"{vendor_id} has no {param_id} cell: this operator needs the extended pack")
+
+
+def _extended_edit(pack: Pack, vendor_id: str, param_id: str, old: str, new: str, *, status: str | None = None,
+                   values: dict | None = None, unpriced: bool = False) -> None:
+    """Rewrite one sentence of a bid and say what the cell becomes. An unpriced deviation keeps its adder at 0."""
+    _need_extended(pack, vendor_id, param_id)
+    pack.replace_text(pack.file_of(vendor_id), old, new)
+    cell = pack.cell(vendor_id, param_id)
+    if status:
+        cell["status"] = status
+    if values:
+        cell["values"] = {**cell["values"], **values}
+    if unpriced:
+        cell["pricing_status"] = "UNPRICED"
+        pack.expected["vendors"][vendor_id]["price_status"] = "UNPRICED_ITEMS"
+
+
+@extended_operator
+def lead_time_in_months(pack: Pack, rng: random.Random) -> None:
+    """vendor-a states its lead time in months (9 months = 39 weeks, inside the 40 the MR allows)."""
+    _extended_edit(pack, "vendor-a", "PARAM-09", "Delivery 36 weeks from purchase order.",
+                   "Delivery 9 months from purchase order.", values={"lead_time": "39 weeks (9 months)"})
+
+
+@extended_operator
+def lead_time_range(pack: Pack, rng: random.Random) -> None:
+    """vendor-c states a range, 36 to 42 weeks. The buyer plans for the upper end, 42, which is late."""
+    _extended_edit(pack, "vendor-c", "PARAM-09", "Delivery 38 weeks from purchase order.",
+                   "Delivery 36 to 42 weeks from purchase order.", status="DEVIATION_DOWNGRADE",
+                   values={"lead_time": "42 weeks"}, unpriced=True)
+
+
+@extended_operator
+def ld_per_day(pack: Pack, rng: random.Random) -> None:
+    """vendor-a states the LD rate per day (0.1% a day is 0.7% a week, above the 0.5% the MR requires)."""
+    _extended_edit(pack, "vendor-a", "PARAM-10", "0.5% per week", "0.1% per day",
+                   values={"ld_rate": "0.1 % per day"})
+
+
+@extended_operator
+def percent_spelled_out(pack: Pack, rng: random.Random) -> None:
+    """vendor-b writes "20 per cent". The value, and so the deviation, is unchanged."""
+    _extended_edit(pack, "vendor-b", "PARAM-11", "limited to 20% of", "limited to 20 per cent of")
+
+
+@extended_operator
+def altitude_in_feet(pack: Pack, rng: random.Random) -> None:
+    """vendor-a rates the equipment in feet: 3300 ft is 1005.8 m, so it still meets 1000 m."""
+    _extended_edit(pack, "vendor-a", "PARAM-14", "up to 1000 m above", "up to 3300 ft above",
+                   values={"site_altitude": "3300 ft"})
+
+
+@extended_operator
+def spares_silent(pack: Pack, rng: random.Random) -> None:
+    """vendor-a's spares sentence is gone. The bid says nothing about spares: manual inspection."""
+    _need_extended(pack, "vendor-a", "PARAM-12")
+    cell = pack.cell("vendor-a", "PARAM-12")
+    filename, quote = pack.file_of("vendor-a"), cell["quote"]
+    pack.remove_block(filename, quote)
+    ideal = pack.locate(filename)
+    ideal["candidates"] = [c for c in ideal["candidates"] if not (c["param_id"] == "PARAM-12" and c["quote"] == quote)]
+    _blank_cells(pack, "vendor-a", ["PARAM-12"])
+    pack.expect_flag("vendor-a", "PARAM-12", "is not stated in")
+
+
+@extended_operator
+def supervision_optional(pack: Pack, rng: random.Random) -> None:
+    """vendor-c makes site supervision optional: left out of the price, and the gap is unpriced."""
+    _extended_edit(pack, "vendor-c", "PARAM-13", "is included in the price.", "is optional and priced on request.",
+                   status="OMITTED", values={"supervision_included": "not included"}, unpriced=True)
+
+
+def operators_for(base: str = BASE_TENDER_ID) -> dict[str, Operator]:
+    """The operators that apply to a base pack: the extended pack also takes the ones written for it."""
+    return OPERATORS if base == BASE_TENDER_ID else {**OPERATORS, **EXTENDED_OPERATORS}
+
+
+def tender_id_for(operators: list[str], seed: int, base: str = BASE_TENDER_ID) -> str:
     digest = hashlib.sha256(f"{'+'.join(operators)}#{seed}".encode()).hexdigest()[:8].upper()
-    return f"MUT-402-{digest}"
+    return f"MUT-{base[-3:]}-{digest}"
 
 
-def mutate(operators: list[str], seed: int = 0) -> Pack:
-    """Apply the operators in order to a fresh copy of TENDER-2026-402."""
-    unknown = [name for name in operators if name not in OPERATORS]
+def mutate(operators: list[str], seed: int = 0, base: str = BASE_TENDER_ID) -> Pack:
+    """Apply the operators in order to a fresh copy of the base pack (TENDER-2026-402 by default)."""
+    available = operators_for(base)
+    unknown = [name for name in operators if name not in available]
     if unknown:
         raise MutationError(f"unknown operator(s): {', '.join(unknown)}")
-    pack = base_pack()
+    pack = base_pack(base)
     for index, name in enumerate(operators):
         # Each operator draws from its own stream, so adding one does not change the others' choices.
-        OPERATORS[name](pack, random.Random(f"{seed}:{index}:{name}"))
+        available[name](pack, random.Random(f"{seed}:{index}:{name}"))
         pack.mutations.append(name)
     if pack.mutations:
         # Who has the lowest true evaluated price depends on every price in the pack; a generated
         # key does not restate it (test_amendments covers the rule itself).
         pack.expected.pop("negotiating_vendor", None)
-    tender_id = tender_id_for(operators, seed)
+    tender_id = tender_id_for(operators, seed, base)
     pack.manifest["tender_id"] = tender_id
     pack.expected["tender_id"] = tender_id
     pack.expected["mutations"] = list(pack.mutations)
@@ -479,24 +580,27 @@ def write(pack: Pack, out_dir: Path) -> Path:
     return target
 
 
-def generate(operators: list[str], out_dir: Path, seed: int = 0) -> Path:
-    return write(mutate(operators, seed), out_dir)
+def generate(operators: list[str], out_dir: Path, seed: int = 0, base: str = BASE_TENDER_ID) -> Path:
+    return write(mutate(operators, seed, base), out_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m samples.mutate", description=__doc__.splitlines()[0])
     parser.add_argument("out_dir", nargs="?", type=Path)
-    parser.add_argument("--op", action="append", default=[], choices=sorted(OPERATORS), help="repeat to combine")
+    parser.add_argument("--base", default=BASE_TENDER_ID, choices=[BASE_TENDER_ID, EXTENDED_BASE_TENDER_ID],
+                        help="the pack to mutate (default TENDER-2026-402)")
+    parser.add_argument("--op", action="append", default=[], choices=sorted({**OPERATORS, **EXTENDED_OPERATORS}),
+                        help="repeat to combine")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--list", action="store_true", help="list the operators and exit")
     args = parser.parse_args(argv)
     if args.list or not args.op:
-        for name, fn in sorted(OPERATORS.items()):
+        for name, fn in sorted(operators_for(args.base).items()):
             print(f"{name}: {(fn.__doc__ or '').strip().splitlines()[0]}")
         return 0
     out_dir = args.out_dir or Path(tempfile.mkdtemp(prefix="antova-mutations-"))
     try:
-        target = generate(args.op, out_dir, args.seed)
+        target = generate(args.op, out_dir, args.seed, args.base)
     except MutationError as exc:
         print(f"FAILED: {exc}")
         return 1

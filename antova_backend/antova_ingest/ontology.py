@@ -131,7 +131,10 @@ EXTENDED_PARAMETERS: tuple[ParameterDef, ...] = (
         "{lead_time}",
         "Delivery lead time in weeks and what it is counted from (the purchase order, approved drawings or a "
         "date). Not the offer validity, the drawing submission time, the FAT date or the warranty period.",
-        sweep_terms=(r"lead[- ]time", r"deliver\w*", r"manufactur\w+", r"ex[- ]works"),
+        # A period counts only beside delivery wording, and never in a warranty or liability sentence.
+        sweep_terms=(r"lead[- ]time",
+                     r"(?!.*(?:warranty|liabilit|defect|guarantee))(?:deliver\w*|manufactur\w+|ex[- ]works)"
+                     r"[^.;]{0,30}\b(?:weeks?|months?|days?)\b"),
     ),
     ParameterDef(
         "PARAM-10", "Delay Liquidated Damages", "Commercial Risk (Liquidated Damages)", Criticality.HIGH,

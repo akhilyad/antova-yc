@@ -457,7 +457,7 @@ _DELIVERY_CONTEXT = re.compile(
     r"\b(?:EXW|CIF|DAP|DDP|DPU|FCA)\b", re.IGNORECASE)
 # Periods that are not the delivery lead time: validity, warranty, payment terms, drawing submission, FAT.
 _NOT_LEAD_TIME = re.compile(
-    r"validity|valid for|warranty|guarantee|payment|invoice|drawing submission|submission of|submit|"
+    r"validity|valid for|warranty|guarantee|liabilit|defect|payment|invoice|drawing submission|submission of|submit|"
     r"review period|\bFAT\b|witness|commissioning|installation", re.IGNORECASE)
 # What the weeks are counted from; the later start wins when a sentence names both.
 _LEAD_ANCHORS = (
@@ -522,7 +522,7 @@ _CAP_AFTER = re.compile(r"^\s*(?:of\s+[^.;,]{0,40}?\s+)?(?:maximum|cap\b|in\s+to
                         re.IGNORECASE)
 _LD_CONTEXT = re.compile(r"liquidated|\bLDs?\b|delay\s+damages|late\s+delivery|penalt", re.IGNORECASE)
 _LIABILITY_CONTEXT = re.compile(r"liabilit", re.IGNORECASE)
-_NO_LD = re.compile(
+NO_LD = re.compile(
     r"\b(?:no|without|excludes?|excluded|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
     r"\bno\s+LDs?\b|\bLDs?\s+(?:excluded|waived|not\s+applicable)", re.IGNORECASE)
@@ -548,7 +548,7 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
         m = _PERCENT.search(quote)
         return _percent_value(m) if m else None
     sentences = split_sentences(quote)
-    if field_name in ("ld_rate", "ld_cap") and any(_NO_LD.search(s) for s in sentences):
+    if field_name in ("ld_rate", "ld_cap") and any(NO_LD.search(s) for s in sentences):
         return FieldValue("percent", 0.0, "0 %", qualifier="none")
     for sentence in sentences:
         for clause in _clauses(sentence):
