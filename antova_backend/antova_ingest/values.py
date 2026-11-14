@@ -67,7 +67,7 @@ def _clauses(sentence: str) -> list[str]:
 
 clauses = _clauses
 # A fault or arc rating is not the busbar's continuous current.
-_NOT_CONTINUOUS = re.compile(r"short[- ]time|withstand|peak|making|Ik|Ip|IAC|internal arc",
+_NOT_CONTINUOUS = re.compile(r"short[- ]time|withstand|\bpeak\b|\bmaking\b|\bIk\b|\bIp\b|\bIAC\b|internal arc",
                              re.IGNORECASE)
 # Per field: clauses matching this describe some other rating and are never read for the field.
 NEGATIVE_CONTEXT = {"ik": _NOT_IK, "ik_duration": _NOT_IK, "rated_current": _NOT_CONTINUOUS}

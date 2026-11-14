@@ -176,3 +176,26 @@ def test_ontology():
     assert EVIDENCE_TIERS["drawing"] == 1
     assert EVIDENCE_TIERS["compliance_table"] == 2
     assert EVIDENCE_TIERS["cover_letter"] == 3
+
+
+# The busbar's continuous current is never read from a clause about a fault rating. The words are whole
+# words (a regression: the word boundaries in this filter had been saved as backspace characters).
+@pytest.mark.parametrize("quote, expected", [
+    ("Ip 80 kA, Ir 2500 A.", "2500 A"),
+    ("Peak 80 kA, rated 2500 A.", "2500 A"),
+    ("Making capacity 63 kA, busbar rated 2000 A.", "2000 A"),
+    ("Ik 31.5 kA, rated 1250 A.", "1250 A"),
+    ("IAC 31.5 kA, rated 1250 A.", "1250 A"),
+])
+def test_a_fault_rating_clause_is_not_read_as_the_busbar_current(quote, expected):
+    assert parse_field("current", quote, "rated_current").display == expected
+
+
+def test_the_fault_words_match_only_as_whole_words():
+    from antova_ingest.values import NEGATIVE_CONTEXT
+
+    rule = NEGATIVE_CONTEXT["rated_current"]
+    assert "\x08" not in rule.pattern
+    assert rule.search("peak 80 kA") and rule.search("Ip 80 kA")
+    assert not rule.search("speaker cabling 2500 A")  # "peak" inside a word
+    assert not rule.search("Zip-tied busbar 2500 A")  # "Ip" inside a word
