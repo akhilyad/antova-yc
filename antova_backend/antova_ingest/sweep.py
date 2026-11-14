@@ -38,6 +38,11 @@ SIGNALS: dict[FieldKind, re.Pattern] = {
     "incoterm": re.compile(r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\b|ex[- ]works|delivered at place|"
                            r"delivered duty paid|free carrier", re.IGNORECASE),
     "months": re.compile(r"\d+\s*-?\s*months?\b", re.IGNORECASE),
+    "lead_time": re.compile(r"\d+(?:\.\d+)?\s*(?:-|to)?\s*(?:\d+(?:\.\d+)?)?\s*(?:weeks?|wks?|months?|days?)\b", re.IGNORECASE),
+    "percent": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)|no liquidated|no LDs?\b|LDs? (?:excluded|waived)", re.IGNORECASE),
+    "money_cap": re.compile(r"(?:€|\$|£|\b(?:EUR|USD|GBP|CHF)\b)\s?\d|\d\s?(?:€|\$|£|EUR|USD|GBP|CHF)\b"),
+    "altitude": re.compile(_NUMBER + r"\s*(?:m|ft)\b"),
+    "standard": re.compile(r"\b(?:IEC|IEEE|ANSI|EN|ISO|DIN|VDE|BS|UL|NEMA)\s*(?:[-/]\s*)?[A-Z]?\d{2,6}"),
 }
 _TERMS: dict[ParameterDef, re.Pattern] = {
     p: re.compile("|".join(f"(?:{term})" for term in p.sweep_terms), re.IGNORECASE)

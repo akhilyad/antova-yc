@@ -13,8 +13,8 @@ from antova_ingest.costs import ConfigError, RateTable
 from antova_ingest.ontology import ORDINALS, PARAMETERS
 
 # Field kinds values.parse_field can read, and the operators values.check can apply.
-PARSED_KINDS = frozenset(values.FIELD_PARSERS) | frozenset(values.QUANTITY_KINDS)
-OPERATORS = frozenset({"ge", "eq", "ord"})
+PARSED_KINDS = frozenset(values.FIELD_PARSERS) | frozenset(values.NAME_PARSERS) | frozenset(values.QUANTITY_KINDS)
+OPERATORS = frozenset({"ge", "le", "eq", "ord", "all"})
 
 _checked = False
 

@@ -46,7 +46,7 @@ _QUANTITY_PATTERNS = {
 _TEMPERATURE = re.compile(r"([+-]?)" + _NUM + r"\s*°\s*([CF])\b|" + _LEAD + _NUM + r"\s*K\b")
 _PINT_UNITS = {
     "kA": ureg.kiloampere, "A": ureg.ampere, "kV": ureg.kilovolt, "V": ureg.volt,
-    "s": ureg.second, "°C": ureg.degC, "°F": ureg.degF, "K": ureg.kelvin,
+    "s": ureg.second, "°C": ureg.degC, "°F": ureg.degF, "K": ureg.kelvin, "m": ureg.meter, "ft": ureg.foot,
 }
 PINT_UNITS = _PINT_UNITS  # public: the codec rebuilds quantities from a unit label
 _DIMENSIONS = {"current": "[current]", "duration": "[time]", "voltage": "[length] ** 2 * [mass] / [current] / [time] ** 3"}
@@ -442,6 +442,235 @@ def parse_commissioning_lag(text: str) -> tuple[int, str] | None:
     return None
 
 
+# --- Schedule, contract-risk, site and standards values -------------------------------------------
+#
+# Lead time (weeks), percentages (LD rate, LD cap, liability cap), money caps, site altitude and
+# cited standards. Every parser is deterministic: a quote it cannot read for certain is None, and
+# the cell is flagged downstream. A parser reads only what is offered: a sentence that carves
+# something out is skipped, never half-read.
+
+_LEAD_TIME = re.compile(
+    _LEAD + r"(\d+(?:\.\d+)?)(?:\s*(?:-|to)\s*(\d+(?:\.\d+)?))?\s*"
+    r"((?:working\s+|business\s+|calendar\s+)?(?:weeks?|wks?|months?|days?))\b", re.IGNORECASE)
+_DELIVERY_CONTEXT = re.compile(
+    r"deliver|lead[- ]time|ex[- ]works|shipment|shipping|dispatch|manufactur|ready for|site arrival|"
+    r"\b(?:EXW|CIF|DAP|DDP|DPU|FCA)\b", re.IGNORECASE)
+# Periods that are not the delivery lead time: validity, warranty, payment terms, drawing submission, FAT.
+_NOT_LEAD_TIME = re.compile(
+    r"validity|valid for|warranty|guarantee|payment|invoice|drawing submission|submission of|submit|"
+    r"review period|\bFAT\b|witness|commissioning|installation", re.IGNORECASE)
+# What the weeks are counted from; the later start wins when a sentence names both.
+_LEAD_ANCHORS = (
+    ("approved_drawings", re.compile(
+        r"approv\w*\s+(?:of\s+)?(?:the\s+)?(?:final\s+)?drawings?|drawings?\s+approval|\bAFC\b", re.IGNORECASE)),
+    ("po", re.compile(
+        r"purchase\s+order|\bPO\b|order\s+(?:placement|confirmation|date)|receipt\s+of\s+(?:the\s+)?order|"
+        r"contract\s+(?:award|signature|signing|date)|letter\s+of\s+(?:award|intent)|\bLOA\b|\bLOI\b|"
+        r"notice\s+to\s+proceed|\bNTP\b|effective\s+date", re.IGNORECASE)),
+)
+
+
+def _weeks(number: float, unit: str) -> float:
+    unit = unit.lower()
+    if "month" in unit:
+        weeks = number * 52 / 12
+    elif "day" in unit:
+        weeks = number / 7
+        if unit.startswith(("working", "business")):
+            weeks *= 7 / 5  # five working days are one calendar week
+    else:
+        weeks = number
+    return round(weeks, 6)
+
+
+def _lead_anchor(text: str) -> str:
+    for anchor, pattern in _LEAD_ANCHORS:
+        if pattern.search(text):
+            return anchor
+    return "unspecified"
+
+
+def _parse_lead_time(quote: str, require_context: bool = True) -> FieldValue | None:
+    """Delivery lead time in weeks, with what it is counted from (`qualifier`: "po",
+    "approved_drawings" or "unspecified"). A range gives its upper end: the buyer plans for the worst case."""
+    for sentence in split_sentences(quote):
+        if _has_carve_out(sentence):
+            continue
+        for clause in _clauses(sentence):
+            if require_context and (not _DELIVERY_CONTEXT.search(clause) or _NOT_LEAD_TIME.search(clause)):
+                continue
+            m = _LEAD_TIME.search(clause)
+            if not m:
+                continue
+            number = float(m.group(2) or m.group(1))
+            weeks = _weeks(number, m.group(3))
+            shown = f"{_fmt(weeks)} weeks"
+            if not re.match(r"(?:\w+\s+)?(?:weeks?|wks?)$", m.group(3), re.IGNORECASE):
+                shown += f" ({_fmt(number)} {m.group(3).lower()})"
+            return FieldValue("lead_time", weeks, shown, qualifier=_lead_anchor(sentence))
+    return None
+
+
+_PERCENT = re.compile(_LEAD + r"(\d+(?:\.\d+)?)\s*(?:%|per\s?cent\b|percent\b)", re.IGNORECASE)
+_RATE_PERIOD = re.compile(
+    r"^\s*(?:of\s+(?:the\s+)?[^.;,]{0,40}?\s+)?(?:per|/|each|every|for each)\s+"
+    r"(?:(?:complete|full|started|commenced|whole)\s+)?(week|day|month)\b", re.IGNORECASE)
+_RATE_WEEKLY = re.compile(r"^\s*(?:of\s+[^.;,]{0,40}?\s+)?(weekly|daily)\b", re.IGNORECASE)
+_CAP_BEFORE = re.compile(r"max\w*|\bcap(?:ped)?\b|not\s+(?:to\s+)?exceed|limited\s+to|up\s+to|ceiling|"
+                         r"aggregate|in\s+total", re.IGNORECASE)
+_CAP_AFTER = re.compile(r"^\s*(?:of\s+[^.;,]{0,40}?\s+)?(?:maximum|cap\b|in\s+total|in\s+aggregate|at\s+most)",
+                        re.IGNORECASE)
+_LD_CONTEXT = re.compile(r"liquidated|\bLDs?\b|delay\s+damages|late\s+delivery|penalt", re.IGNORECASE)
+_LIABILITY_CONTEXT = re.compile(r"liabilit", re.IGNORECASE)
+_NO_LD = re.compile(
+    r"\b(?:no|without|excludes?|excluded|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
+    r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
+    r"\bno\s+LDs?\b|\bLDs?\s+(?:excluded|waived|not\s+applicable)", re.IGNORECASE)
+_PER_WEEK_FACTOR = {"week": 1.0, "day": 7.0, "month": 12 / 52}
+_CAP_BASIS = (("delayed_portion", re.compile(r"delayed|undelivered|late(?:ly)?\s+delivered|affected", re.IGNORECASE)),
+              ("contract", re.compile(r"contract|order|total\s+(?:price|value)", re.IGNORECASE)))
+
+
+def _percent_value(m: re.Match, factor: float = 1.0, shown: str = "", qualifier: str | None = None) -> FieldValue:
+    number = float(m.group(1))
+    return FieldValue("percent", round(number * factor, 9), shown or f"{_fmt(number)} %", qualifier=qualifier)
+
+
+def _cap_basis(clause: str) -> str:
+    return next((basis for basis, pattern in _CAP_BASIS if pattern.search(clause)), "unspecified")
+
+
+def _parse_percent(quote: str, field_name: str, require_context: bool = True) -> FieldValue | None:
+    """One percentage, chosen by the field: `ld_rate` (per week; per day or month is converted),
+    `ld_cap` (a maximum on liquidated damages) or `liability_cap` (a limit on total liability).
+    "No liquidated damages" reads as 0 for both LD fields."""
+    if not require_context:
+        m = _PERCENT.search(quote)
+        return _percent_value(m) if m else None
+    sentences = split_sentences(quote)
+    if field_name in ("ld_rate", "ld_cap") and any(_NO_LD.search(s) for s in sentences):
+        return FieldValue("percent", 0.0, "0 %", qualifier="none")
+    for sentence in sentences:
+        for clause in _clauses(sentence):
+            for m in _PERCENT.finditer(clause):
+                before, after = clause[:m.start()], clause[m.end():]
+                period, weekly = _RATE_PERIOD.match(after), _RATE_WEEKLY.match(after)
+                per = bool(period or weekly)
+                if field_name == "ld_rate" and per and _LD_CONTEXT.search(sentence):
+                    unit = period.group(1).lower() if period else ("day" if weekly.group(1).lower() == "daily" else "week")
+                    return _percent_value(m, _PER_WEEK_FACTOR[unit], f"{_fmt(float(m.group(1)))} % per {unit}", "per_week")
+                is_cap = not per and bool(_CAP_BEFORE.search(before[-60:]) or _CAP_AFTER.match(after))
+                if field_name == "ld_cap" and is_cap and _LD_CONTEXT.search(sentence):
+                    return _percent_value(m, qualifier=_cap_basis(clause))
+                if (field_name == "liability_cap" and is_cap and _LIABILITY_CONTEXT.search(clause)
+                        and not _LD_CONTEXT.search(clause)):
+                    return _percent_value(m, qualifier=_cap_basis(clause))
+    return None
+
+
+_MONEY_CAP_CONTEXT = re.compile(r"max\w*|\bcap(?:ped)?\b|not\s+(?:to\s+)?exceed|limited\s+to|up\s+to|ceiling|"
+                                r"aggregate|liabilit|liquidated|\bLDs?\b", re.IGNORECASE)
+
+
+def _money_in(sentence: str) -> tuple[Decimal, str] | None:
+    before, after = _PRICE_BEFORE.search(sentence), _PRICE_AFTER.search(sentence)
+    if before and (not after or before.start() <= after.start()):
+        raw, token, end = before.group(2), before.group(1), before.end()
+    elif after:
+        raw, token, end = after.group(1), after.group(2), after.end()
+    else:
+        return None
+    if _ABBREVIATED.match(sentence, end):
+        return None  # "EUR 1m" is not read to the euro
+    amount = _amount(raw)
+    if amount is None:
+        return None
+    return amount, _CURRENCY_CODES.get(token, token.upper())
+
+
+def _parse_money_cap(quote: str, require_context: bool = True) -> FieldValue | None:
+    """A capped amount of money with its currency (never assumed): "capped at EUR 500,000"."""
+    for sentence in split_sentences(quote):
+        if _has_carve_out(sentence) or (require_context and not _MONEY_CAP_CONTEXT.search(sentence)):
+            continue
+        found = _money_in(sentence)
+        if found:
+            amount, code = found
+            shown = f"{amount:,.0f}" if amount == amount.to_integral_value() else f"{amount:,.2f}"
+            return FieldValue("money_cap", amount, f"{code} {shown}", qualifier=code)
+    return None
+
+
+_ALTITUDE = re.compile(_LEAD + _NUM + r"\s*(masl|amsl|m|ft)\b(?!\s*(?:/|²|³))")
+
+
+def _altitude_unit(token: str) -> str:
+    return "ft" if token == "ft" else "m"  # masl and amsl are metres above sea level
+_ALTITUDE_CONTEXT = re.compile(r"altitude|elevation|a\.?s\.?l\.?|above\s+(?:mean\s+)?sea\s+level|\bmasl\b|\bamsl\b",
+                               re.IGNORECASE)
+
+
+def _parse_altitude(quote: str, require_context: bool = True) -> FieldValue | None:
+    """Site altitude, or the altitude an item is rated for, in metres or feet as stated."""
+    for sentence in split_sentences(_normalize_text(quote)):
+        if _has_carve_out(sentence) or (require_context and not _ALTITUDE_CONTEXT.search(sentence)):
+            continue
+        for clause in (c for c in re.split(r"[;()]|,\s+", sentence) if c.strip() and not _WITH_DERATING.search(c)):
+            m = _ALTITUDE.search(clause)
+            if m:
+                magnitude = _number(m.group(1))
+                unit = _altitude_unit(m.group(2))
+                return FieldValue("altitude", Q_(magnitude, _PINT_UNITS[unit]), f"{_fmt(magnitude)} {unit}")
+    return None
+
+
+# Standards bodies and reference numbers: "IEC 62271-200:2011", "IEEE C37.20.2", "EN 50160".
+_STANDARD = re.compile(
+    r"\b(IEC|IEEE|ANSI|EN|ISO|DIN|VDE|BS|UL|NEMA)\s*(?:[-/]\s*)?"
+    r"((?:[A-Z]\d{2}[.\d]*|\d{2,6})(?:-\d+)*(?:\.\d+)*)"
+    r"(?:\s*:\s*(\d{4})|\s*\((\d{4})\))?")
+# A sentence that states a departure from a standard does not offer it.
+_STANDARD_NEGATED = re.compile(
+    r"\bnot\s+(?:in\s+accordance|compliant|certified|tested|designed|complying|comply|conform\w*)|non-?compl\w+|"
+    r"deviat\w+|except(?:ion|ions)?\b|\bwithout\b|partial(?:ly)?\s+compl\w+", re.IGNORECASE)
+
+
+def _parse_standard(quote: str) -> FieldValue | None:
+    """The standards a passage cites, as a sorted tuple such as ("IEC 61850", "IEC 62271-200:2011").
+    An edition is kept only when written as :YYYY or (YYYY). A sentence that carves out or negates
+    compliance cites nothing."""
+    refs: dict[str, str | None] = {}
+    for sentence in split_sentences(_normalize_text(quote).replace("‑", "-")):
+        if _has_carve_out(sentence) or _STANDARD_NEGATED.search(sentence):
+            continue
+        for m in _STANDARD.finditer(sentence):
+            base = f"{m.group(1)} {m.group(2).rstrip('.-')}"
+            year = m.group(3) or m.group(4)
+            if year and (refs.get(base) is None or year > refs[base]):
+                refs[base] = year
+            else:
+                refs.setdefault(base, None)
+    if not refs:
+        return None
+    items = tuple(sorted(f"{base}:{year}" if year else base for base, year in refs.items()))
+    return FieldValue("standard", items, ", ".join(items))
+
+
+def _split_standard(item: str) -> tuple[str, str | None]:
+    base, _, year = item.partition(":")
+    return base, year or None
+
+
+def standards_satisfied(required: tuple, offered: tuple) -> bool:
+    """Every required standard is offered, and an edition the requirement names is met by the same or a newer one."""
+    have = dict(_split_standard(item) for item in offered)
+    for item in required:
+        base, year = _split_standard(item)
+        if base not in have or (year and (have[base] is None or have[base] < year)):
+            return False
+    return True
+
+
 QUANTITY_KINDS = tuple(_QUANTITY_PATTERNS)
 FIELD_PARSERS = {
     "temperature": _parse_temperature,
@@ -453,12 +682,28 @@ FIELD_PARSERS = {
     "fat_days": _parse_fat_days,
     "incoterm": _parse_incoterm,
     "months": _parse_months,
+    "lead_time": _parse_lead_time,
+    "money_cap": _parse_money_cap,
+    "altitude": _parse_altitude,
+    "standard": _parse_standard,
+}
+# Parsers that choose among several values by the field's name (an LD rate, an LD cap and a liability cap
+# are all percentages).
+NAME_PARSERS = {"percent": _parse_percent}
+# Context-free readers for the ontology's plausible bounds, which are bare values such as "4 weeks".
+_BOUND_PARSERS = {
+    "lead_time": lambda text, name: _parse_lead_time(text, require_context=False),
+    "percent": lambda text, name: _parse_percent(text, name, require_context=False),
+    "money_cap": lambda text, name: _parse_money_cap(text, require_context=False),
+    "altitude": lambda text, name: _parse_altitude(text, require_context=False),
 }
 
 
 def parse_field(kind: FieldKind, quote: str, field_name: str) -> FieldValue | None:
     if kind in _QUANTITY_PATTERNS:
         return _parse_quantity(kind, quote, field_name)
+    if kind in NAME_PARSERS:
+        return NAME_PARSERS[kind](quote, field_name)
     return FIELD_PARSERS[kind](quote)
 
 
@@ -572,7 +817,16 @@ def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[b
         canonical = f"{_fmt(round(converted, 9))} {_unit_label(required)}"
         if field.operator == "ge":
             return (a >= b or math.isclose(a, b, rel_tol=1e-9)), canonical
+        if field.operator == "le":
+            return (a <= b or math.isclose(a, b, rel_tol=1e-9)), canonical
         return math.isclose(a, b, rel_tol=1e-9), canonical
+    if field.operator == "all" and isinstance(req, tuple) and isinstance(off, tuple):
+        return standards_satisfied(req, off), offered.display
+    if isinstance(req, Decimal) and isinstance(off, Decimal):
+        if required.qualifier != offered.qualifier:
+            return False, offered.display  # two currencies: not comparable without a dated rate
+        passed = {"ge": off >= req, "le": off <= req}.get(field.operator, off == req)
+        return passed, offered.display
     if isinstance(req, IPCode) and isinstance(off, IPCode):
         return (off.solid >= req.solid and off.liquid >= req.liquid), offered.display
     if field.operator == "ord":
@@ -583,6 +837,8 @@ def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[b
         return order.index(off) >= order.index(req), offered.display
     if field.operator == "ge":
         return off >= req, offered.display
+    if field.operator == "le":
+        return off <= req, offered.display
     return off == req, offered.display
 
 
@@ -605,7 +861,8 @@ def plausible_bounds(field: FieldDef) -> tuple[FieldValue, FieldValue] | None:
         if field.kind in ("fat_days", "months"):
             bounds.append(FieldValue(field.kind, int(text), text))
             continue
-        value = parse_field(field.kind, text, field.name)
+        read_bound = _BOUND_PARSERS.get(field.kind)
+        value = read_bound(text, field.name) if read_bound else parse_field(field.kind, text, field.name)
         if value is None:
             raise ValueError(f"plausible bound {text!r} of field {field.name!r} is not a {field.kind}")
         bounds.append(value)
@@ -649,6 +906,22 @@ def value_in_span(value: FieldValue, text: str) -> bool:
         return value.value == 0 or any(int(m.group(1)) == value.value for m in _DAYS.finditer(text))
     if kind == "months":
         return any(int(m.group(1)) == value.value for m in _MONTHS.finditer(text))
+    if kind == "lead_time":
+        return any(math.isclose(_weeks(float(m.group(2) or m.group(1)), m.group(3)), value.value, rel_tol=1e-9)
+                   for m in _LEAD_TIME.finditer(text))
+    if kind == "percent":
+        if value.qualifier == "none":
+            return True  # "no liquidated damages": read from wording, no number to find
+        shown = float(value.display.split(" ", 1)[0])
+        return any(math.isclose(float(m.group(1)), shown, rel_tol=1e-9) for m in _PERCENT.finditer(text))
+    if kind == "money_cap":
+        return any((found := _money_in(sentence)) and found[0] == value.value for sentence in split_sentences(text))
+    if kind == "altitude":
+        return any(f"{_fmt(_number(m.group(1)))} {_altitude_unit(m.group(2))}" == value.display for m in _ALTITUDE.finditer(text))
+    if kind == "standard":
+        flat = _normalize_text(text).replace("‑", "-")
+        return all(re.search(re.escape(base.split(" ", 1)[0]) + r"\s*(?:[-/]\s*)?" + re.escape(base.split(" ", 1)[1]), flat)
+                   for base, _ in map(_split_standard, value.value))
     if kind == "ip":
         return bool(re.search(rf"\bIP\s?{value.value.solid}{value.value.liquid}\b", text))
     if kind == "iac":
@@ -663,7 +936,7 @@ def rule_text(param: ParameterDef, requirement: dict[str, FieldValue]) -> str:
     parts = []
     for f in param.fields:
         if f.name in requirement:
-            symbol = "=" if f.operator == "eq" else "≥"
+            symbol = {"eq": "=", "le": "≤", "all": "complies with"}.get(f.operator, "≥")
             parts.append(f"{f.label} {symbol} {requirement[f.name].display}")
     return " AND ".join(parts)
 

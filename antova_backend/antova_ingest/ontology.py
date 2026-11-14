@@ -19,7 +19,8 @@ class FieldDef:
     kind: FieldKind
     # "ge": at least (quantities, IP codes). "eq": exactly. "ord": at least, in the declared
     # order of ORDINALS for this field's kind (a better Incoterm or arc class is compliant).
-    operator: Literal["ge", "eq", "ord"]
+    # "le": at most (a lead time). "all": every required standard is offered, in the same or a newer edition.
+    operator: Literal["ge", "le", "eq", "ord", "all"]
     label: str
     # (low, high), written like values in a bid. A parse outside it is not believed: the value
     # is dropped and the cell flagged. Ranges are for this equipment class (MV GIS switchgear).

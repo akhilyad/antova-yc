@@ -408,7 +408,8 @@ def _page_ranges(pages: list[int]) -> str:
     return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in ranges)
 
 
-_NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fat_days", "months"})
+_NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fat_days", "months",
+                            "lead_time", "percent", "money_cap", "altitude"})
 
 
 def read_values(param_id: str, citation: Citation, locale: str,
