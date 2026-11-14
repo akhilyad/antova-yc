@@ -117,6 +117,8 @@ class TenderPackage(BaseModel):
     rate_table_version: str = ""
     # The buyer-entered project baseline ({field: {"value", "source", "note"}}), or None.
     project: Optional[Dict[str, Any]] = None
+    # The findings register (antova_ingest.findings) for classes that carry one, else None.
+    findings: Optional[List[Dict[str, Any]]] = None
 
 
 class SensitivitySettings(BaseModel):

@@ -184,8 +184,9 @@ def brief_payload(
     reviews = reviews or {}
     items = open_items(tender, overrides, reviews)
     tender_json = tender.model_dump(mode="json")
-    if tender_json.get("project") is None:
-        del tender_json["project"]  # no baseline: the payload is what it was before the field existed
+    for optional in ("project", "findings"):
+        if tender_json.get(optional) is None:
+            del tender_json[optional]  # absent: the payload is what it was before the field existed
     return {
         "share_id": meta.share_id,
         "status": meta.status,

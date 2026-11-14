@@ -189,6 +189,11 @@ PARAMETERS_BY_CLASS: dict[str, tuple[ParameterDef, ...]] = {
     EXTENDED_EQUIPMENT_CLASS: PARAMETERS + EXTENDED_PARAMETERS,
 }
 
+# The classes whose tenders carry a findings register. The first class is frozen as released, so its
+# briefs, fixtures and saved answers keep their shape; the register comes with the extended class.
+FINDINGS_CLASSES = frozenset({EXTENDED_EQUIPMENT_CLASS})
+
+
 
 class UnknownEquipmentClass(ValueError):
     pass

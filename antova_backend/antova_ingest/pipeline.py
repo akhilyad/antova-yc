@@ -20,12 +20,12 @@ from typing import Callable
 import anthropic
 
 import antova_engine as engine
-from antova_ingest import artifacts, codec, config, costs, extract, sweep
+from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
 from antova_ingest.ontology import (
-    DEFAULT_EQUIPMENT_CLASS, SECTION_LABELS, UnknownEquipmentClass, params_by_id_for, parameters_for,
+    DEFAULT_EQUIPMENT_CLASS, FINDINGS_CLASSES, SECTION_LABELS, UnknownEquipmentClass, params_by_id_for, parameters_for,
 )
 from antova_ingest.parse import (
     citation_for_span,
@@ -688,6 +688,11 @@ def stage_leveled(bodies: dict) -> dict:
         equipment_class=manifest.equipment_class, rate_table_version=table["version"],
         project=(manifest.project.model_dump(mode="json", exclude_none=True) if manifest.project else None),
     )
+
+    if manifest.equipment_class in FINDINGS_CLASSES:
+        tender.findings = findings.build_findings(
+            tender, resolutions, requirements, project=tender.project,
+            estimates={name: Decimal(str(v)) for name, v in manifest.engineering_estimates.items()})
 
     # Amendment A2: negotiate with the lowest true evaluated price, not the lowest headline.
     choice = engine.negotiating_choice(tender)

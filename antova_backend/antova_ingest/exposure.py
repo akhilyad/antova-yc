@@ -59,7 +59,9 @@ def delay_cost(weeks_late, cost_per_week) -> Exposure:
     if rate < 0:
         return _unknown("delay", "the cost of a week of delay is negative")
     weeks = max(late, Decimal("0"))
-    return Exposure("delay", _euros(weeks * rate), f"{_n(weeks)} weeks late × €{rate:,.2f} per week")
+    shown = _n(weeks.quantize(CENTS, rounding=ROUND_HALF_UP))
+    approx = "≈ " if shown != _n(weeks) else ""  # the amount uses the exact weeks; only the display is rounded
+    return Exposure("delay", _euros(weeks * rate), f"{approx}{shown} weeks late × €{rate:,.2f} per week")
 
 
 def _recovered(rate_pct: Decimal, cap_pct: Decimal, weeks: Decimal) -> Decimal:
