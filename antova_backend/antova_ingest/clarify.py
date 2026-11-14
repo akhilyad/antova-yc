@@ -45,6 +45,21 @@ FIELD_TEMPLATES: dict[str, tuple[str, str, str]] = {
                       "Confirm the rated voltage and provide the type-test certificate."),
     "max_ambient": ("a maximum ambient temperature of {offered} without derating", "{required}",
                     "Confirm the rating and any derating that applies."),
+    "lead_time": ("a delivery lead time of {offered}", "{required}",
+                  "Confirm the lead time, what it is counted from and the milestone dates."),
+    "ld_rate": ("delay liquidated damages of {offered}", "{required}",
+                "Confirm the delay liquidated damages rate and the period it applies to."),
+    "ld_cap": ("a cap on delay liquidated damages of {offered}", "{required}",
+               "Confirm the cap on delay liquidated damages and what it is a share of."),
+    "liability_cap": ("a limit on total liability of {offered}", "{required}",
+                      "Confirm the liability limit and what it is a share of."),
+    "spares_included": ("commissioning spares {offered}", "commissioning spares {required}",
+                        "Confirm that commissioning spares are included in the price, or state the price to include them."),
+    "supervision_included": ("site supervision {offered}", "site supervision {required}",
+                             "Confirm that supervision of erection and commissioning is included in the price, "
+                             "or state the price to include it."),
+    "site_altitude": ("a rated altitude of {offered}", "{required}",
+                      "Confirm the altitude rating and any derating that applies."),
 }
 _GENERIC = ("{label} {offered}", "{required}", "Confirm the offered value and the page where it is documented.")
 _PAGE = re.compile(r"\bp\.(\d+(?:-\d+)?)")

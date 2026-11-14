@@ -42,6 +42,8 @@ SIGNALS: dict[FieldKind, re.Pattern] = {
     "percent": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)|no liquidated|no LDs?\b|LDs? (?:excluded|waived)", re.IGNORECASE),
     "money_cap": re.compile(r"(?:€|\$|£|\b(?:EUR|USD|GBP|CHF)\b)\s?\d|\d\s?(?:€|\$|£|EUR|USD|GBP|CHF)\b"),
     "altitude": re.compile(_NUMBER + r"\s*(?:m|ft)\b"),
+    "scope": re.compile(r"\bincluded?\b|\bincludes\b|\bincluding\b|excluded|not included|separately|by others|optional|"
+                        r"on request|extra cost", re.IGNORECASE),
     "standard": re.compile(r"\b(?:IEC|IEEE|ANSI|EN|ISO|DIN|VDE|BS|UL|NEMA)\s*(?:[-/]\s*)?[A-Z]?\d{2,6}"),
 }
 _TERMS: dict[ParameterDef, re.Pattern] = {

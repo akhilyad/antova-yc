@@ -687,9 +687,40 @@ FIELD_PARSERS = {
     "altitude": _parse_altitude,
     "standard": _parse_standard,
 }
-# Parsers that choose among several values by the field's name (an LD rate, an LD cap and a liability cap
+# Whether something is part of the price: spares, site supervision. Read per field from the clauses that
+# name it. An exclusion anywhere beats an inclusion: the buyer is told the bad news.
+_SCOPE_SUBJECT = {
+    "spares_included": re.compile(r"spares?\b|spare parts", re.IGNORECASE),
+    "supervision_included": re.compile(r"supervis\w+|commissioning engineer", re.IGNORECASE),
+}
+_SCOPE_IN = re.compile(r"\b(?:included|includes|including|incl\.?)\b|within (?:the )?(?:price|scope)|"
+                       r"part of (?:the )?(?:price|scope|supply)|in the (?:contract )?price", re.IGNORECASE)
+_SCOPE_OUT = re.compile(r"\b(?:excluded|exclude[sd]?|not included|not part of|not offered|not covered|"
+                        r"quoted separately|priced separately|offered separately|charged (?:extra|separately)|"
+                        r"by others|by the (?:buyer|purchaser)|optional|on request|at extra cost|extra cost)\b|"
+                        r"billed per|supplied loose", re.IGNORECASE)
+
+
+def _parse_scope(quote: str, field_name: str) -> FieldValue | None:
+    """1 ("included") or 0 ("not included") for what the field names, or None when the text does not say."""
+    subject = _SCOPE_SUBJECT.get(field_name)
+    if subject is None:
+        return None
+    included = False
+    for sentence in split_sentences(quote):
+        for clause in _clauses(sentence):
+            if not subject.search(clause):
+                continue
+            if _SCOPE_OUT.search(clause):
+                return FieldValue("scope", 0, "not included")
+            if _SCOPE_IN.search(clause):
+                included = True
+    return FieldValue("scope", 1, "included") if included else None
+
+
+# One-argument parsers by kind, and ones that need, an LD cap and a liability cap
 # are all percentages).
-NAME_PARSERS = {"percent": _parse_percent}
+NAME_PARSERS = {"percent": _parse_percent, "scope": _parse_scope}
 # Context-free readers for the ontology's plausible bounds, which are bare values such as "4 weeks".
 _BOUND_PARSERS = {
     "lead_time": lambda text, name: _parse_lead_time(text, require_context=False),
@@ -936,6 +967,9 @@ def rule_text(param: ParameterDef, requirement: dict[str, FieldValue]) -> str:
     parts = []
     for f in param.fields:
         if f.name in requirement:
+            if f.kind == "scope":
+                parts.append(f"{f.label} {requirement[f.name].display}")
+                continue
             symbol = {"eq": "=", "le": "≤", "all": "complies with"}.get(f.operator, "≥")
             parts.append(f"{f.label} {symbol} {requirement[f.name].display}")
     return " AND ".join(parts)

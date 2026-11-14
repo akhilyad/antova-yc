@@ -121,10 +121,70 @@ PARAMETERS: tuple[ParameterDef, ...] = (
 
 PARAMS_BY_ID: dict[str, ParameterDef] = {p.id: p for p in PARAMETERS}
 
+# The delivery, contract-risk and scope-boundary parameters added after the first eight. They are a
+# separate equipment class so that tenders, saved locator answers and fingerprints made under the
+# first eight stay exactly as they were; a manifest opts in with equipment_class "mv_gis_switchgear_ext".
+EXTENDED_PARAMETERS: tuple[ParameterDef, ...] = (
+    ParameterDef(
+        "PARAM-09", "Delivery Lead Time", "Schedule & Delivery", Criticality.HIGH,
+        (FieldDef("lead_time", "lead_time", "le", "Lead time", plausible=("1 weeks", "150 weeks")),),
+        "{lead_time}",
+        "Delivery lead time in weeks and what it is counted from (the purchase order, approved drawings or a "
+        "date). Not the offer validity, the drawing submission time, the FAT date or the warranty period.",
+        sweep_terms=(r"lead[- ]time", r"deliver\w*", r"manufactur\w+", r"ex[- ]works"),
+    ),
+    ParameterDef(
+        "PARAM-10", "Delay Liquidated Damages", "Commercial Risk (Liquidated Damages)", Criticality.HIGH,
+        (FieldDef("ld_rate", "percent", "ge", "LD rate", plausible=("0 %", "10 %")),
+         FieldDef("ld_cap", "percent", "ge", "LD cap", plausible=("0 %", "100 %"))),
+        "{ld_rate}; cap {ld_cap}",
+        "Delay liquidated damages: the rate per week or per day of delay as a percentage of the contract price, "
+        "and the maximum cap on them. If the text says liquidated damages are excluded or not accepted, quote that.",
+        sweep_terms=(r"liquidated damages", r"\bLDs?\b", r"delay damages", r"penalt\w+"),
+    ),
+    ParameterDef(
+        "PARAM-11", "Limitation of Liability", "Commercial Risk (Liability)", Criticality.HIGH,
+        (FieldDef("liability_cap", "percent", "ge", "Liability cap", plausible=("1 %", "1000 %")),),
+        "{liability_cap}",
+        "The limit on the supplier's total liability as a percentage of the contract price. Not the defect "
+        "liability period and not liquidated damages.",
+        sweep_terms=(r"liabilit\w+",),
+    ),
+    ParameterDef(
+        "PARAM-12", "Commissioning Spares", "Scope Boundary & Site Interface", Criticality.COMMERCIAL,
+        (FieldDef("spares_included", "scope", "ge", "Commissioning spares"),),
+        "commissioning spares {spares_included}",
+        "Whether commissioning spare parts are included in the price, or quoted separately, optional or excluded.",
+        scope_field="spares_included",
+        sweep_terms=(r"spares?\b", r"spare parts"),
+    ),
+    ParameterDef(
+        "PARAM-13", "Site Supervision", "Scope Boundary & Site Interface", Criticality.COMMERCIAL,
+        (FieldDef("supervision_included", "scope", "ge", "Site supervision"),),
+        "site supervision {supervision_included}",
+        "Whether supervision of erection and commissioning at site is included in the price, or quoted "
+        "separately, optional or excluded.",
+        scope_field="supervision_included",
+        sweep_terms=(r"supervis\w+", r"commissioning engineer"),
+    ),
+    ParameterDef(
+        "PARAM-14", "Rated Altitude", "Thermal & Environmental", Criticality.MANDATORY,
+        (FieldDef("site_altitude", "altitude", "ge", "Altitude", plausible=("0 m", "4500 m")),),
+        "rated for {site_altitude}",
+        "The altitude above sea level the equipment is rated for, or the installation altitude the MR requires, "
+        "in metres or feet.",
+        sweep_terms=(r"altitude", r"elevation", r"above sea level", r"\bmasl\b"),
+    ),
+)
+
 # One parameter set per equipment class. PARAMETERS and PARAMS_BY_ID above stay as the
 # default class's names; code that holds a manifest asks for its own class instead.
 DEFAULT_EQUIPMENT_CLASS = "mv_gis_switchgear"
-PARAMETERS_BY_CLASS: dict[str, tuple[ParameterDef, ...]] = {DEFAULT_EQUIPMENT_CLASS: PARAMETERS}
+EXTENDED_EQUIPMENT_CLASS = "mv_gis_switchgear_ext"
+PARAMETERS_BY_CLASS: dict[str, tuple[ParameterDef, ...]] = {
+    DEFAULT_EQUIPMENT_CLASS: PARAMETERS,
+    EXTENDED_EQUIPMENT_CLASS: PARAMETERS + EXTENDED_PARAMETERS,
+}
 
 
 class UnknownEquipmentClass(ValueError):

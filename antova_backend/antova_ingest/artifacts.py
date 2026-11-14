@@ -89,9 +89,9 @@ def _source_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
-def ontology_hash() -> str:
+def ontology_hash(equipment_class: str = ontology.DEFAULT_EQUIPMENT_CLASS) -> str:
     return sha256_of({
-        "parameters": [dataclasses.asdict(p) for p in ontology.PARAMETERS],
+        "parameters": [dataclasses.asdict(p) for p in ontology.parameters_for(equipment_class)],
         "evidence_tiers": ontology.EVIDENCE_TIERS,
         "heading_sections": [[list(phrases), section] for phrases, section in ontology.HEADING_SECTIONS],
         "ordinals": getattr(ontology, "ORDINALS", {}),
@@ -112,6 +112,7 @@ def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
     manifest_path = tender_dir / "manifest.json"
     inputs = {"manifest.json": _file_sha256(manifest_path)}
     rate_table = ""
+    equipment_class = extract.manifest_equipment_class(tender_dir)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for doc in manifest.get("documents", []):
@@ -121,10 +122,11 @@ def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
         pass  # a broken manifest fails the run at intake; the fingerprint still names what was there
     parts = {
         "inputs": inputs,
-        "ontology": ontology_hash(),
+        "ontology": ontology_hash(equipment_class) if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
         "rules": rules_hash(),
         "rate_table": rate_table,
-        "prompt": sha256_text(extract.build_system_prompt()),
+        "prompt": sha256_text(extract.build_system_prompt(equipment_class))
+        if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
         "locator_mode": locator_mode,
         "package_version": antova_ingest.__version__,
     }

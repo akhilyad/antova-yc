@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from antova_ingest import costs, sweep, values
 from antova_ingest.costs import ConfigError, RateTable
-from antova_ingest.ontology import ORDINALS, PARAMETERS
+from antova_ingest.ontology import ORDINALS, PARAMETERS_BY_CLASS, parameters_for
 
 # Field kinds values.parse_field can read, and the operators values.check can apply.
 PARSED_KINDS = frozenset(values.FIELD_PARSERS) | frozenset(values.NAME_PARSERS) | frozenset(values.QUANTITY_KINDS)
@@ -24,10 +24,15 @@ def rate_table_names() -> list[str]:
 
 
 def validate_ontology() -> None:
+    for equipment_class, parameters in PARAMETERS_BY_CLASS.items():
+        _validate_class(equipment_class, parameters)
+
+
+def _validate_class(equipment_class: str, parameters) -> None:
     seen: set[str] = set()
-    for param in PARAMETERS:
+    for param in parameters:
         if param.id in seen:
-            raise ConfigError(f"ontology: parameter {param.id} is defined twice")
+            raise ConfigError(f"ontology {equipment_class}: parameter {param.id} is defined twice")
         seen.add(param.id)
         if not param.fields:
             raise ConfigError(f"ontology: parameter {param.id} has no fields")
@@ -60,14 +65,15 @@ def validate_ontology() -> None:
 
 def validate_table(table: RateTable) -> None:
     """Every class a failing check can produce is either priced or knowingly listed as unpriced."""
-    for param in PARAMETERS:
+    parameters = parameters_for(table.equipment_class)
+    for param in parameters:
         for f in param.fields:
             for cls in costs.classes_for_field(param, f):
                 if cls not in table.deviation_rates and cls not in table.unpriced_classes:
                     raise ConfigError(
                         f"rate table {table.version}: no rate lines for {cls} "
                         f"(add them, or list the class under unpriced_classes)")
-    known = {cls for param in PARAMETERS for f in param.fields for cls in costs.classes_for_field(param, f)}
+    known = {cls for param in parameters for f in param.fields for cls in costs.classes_for_field(param, f)}
     for cls in table.unpriced_classes:
         if cls not in known:
             raise ConfigError(f"rate table {table.version}: unpriced class {cls} matches no ontology field")

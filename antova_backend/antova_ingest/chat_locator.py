@@ -135,9 +135,10 @@ class ChatCompletionsLocator(ModelLocator):
         json_mode = (os.environ.get("EXPLABS_JSON_MODE") or "json_object").strip().lower()
         if json_mode not in ("json_object", "off"):
             raise ValueError(f"EXPLABS_JSON_MODE must be json_object or off, not {json_mode!r}")
-        prompt = extract.build_system_prompt() + schema_instruction()
+        equipment_class = extract.manifest_equipment_class(tender_dir)
+        prompt = extract.build_system_prompt(equipment_class) + schema_instruction()
         store = ResponseStore(Path(tender_dir) / "saved_responses", model=model,
-                              salt=extract.sha256_short(prompt))
+                              salt=extract.sha256_short(prompt), equipment_class=equipment_class)
         return cls(
             store, mode, model=model, base_url=base_url,
             max_input_tokens=_env_int("EXPLABS_MAX_INPUT_TOKENS", DEFAULT_MAX_INPUT_TOKENS),
@@ -157,7 +158,7 @@ class ChatCompletionsLocator(ModelLocator):
             raise MissingCredentials(filename, KEY_VARIABLE)
 
     def _system(self) -> str:
-        return extract.build_system_prompt() + schema_instruction()
+        return extract.build_system_prompt(self.store.equipment_class) + schema_instruction()
 
     def _count(self, client: Any, system: str, content: str) -> int:
         return int((len(system) + len(content)) / CHARS_PER_TOKEN) + 1

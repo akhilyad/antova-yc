@@ -222,6 +222,10 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
         parameters_for(manifest.equipment_class)
     except UnknownEquipmentClass as exc:
         raise IngestFailed(str(exc)) from exc
+    table_class = load_rate_table(manifest.rate_table).equipment_class
+    if table_class != manifest.equipment_class:
+        raise IngestFailed(f"rate table {manifest.rate_table!r} prices equipment class {table_class!r}, "
+                           f"but the manifest names {manifest.equipment_class!r}")
     documents: list[dict] = []
     warnings: list[str] = []
     for entry in manifest.documents:
