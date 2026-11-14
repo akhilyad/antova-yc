@@ -113,7 +113,18 @@ def _implausible_headlines(headlines: dict[str, float | None]) -> list[str]:
     A misread price (a unit rate taken for the total, a dropped thousands group) is usually off
     by far more than that. The price is reported as read; only a person corrects it.
     """
-    pool = {vendor_id: value for vendor_id, value in headlines.items() if value}
+    flagged = _outliers(headlines, HEADLINE_PLAUSIBILITY_SHARE)
+    return [
+        f"{vendor_id}: headline price EUR {headlines[vendor_id]:,.2f} is far from the median of the other bids "
+        f"(EUR {flagged[vendor_id]:,.2f}); check the cited passage"
+        for vendor_id in headlines if vendor_id in flagged
+    ]
+
+
+def _outliers(values: dict[str, float | None], share: float) -> dict[str, float]:
+    """The vendors whose value deviates by more than `share` from the median of the other bids' values,
+    each with the median it was compared with. Unknown values (None or 0) take no part."""
+    pool = {vendor_id: value for vendor_id, value in values.items() if value}
     flagged: dict[str, float] = {}  # vendor -> the median it was compared with
 
     def others_median(vendor_id: str) -> float:
@@ -134,18 +145,46 @@ def _implausible_headlines(headlines: dict[str, float | None]) -> list[str]:
     # disagree are both flagged: nothing says which one is wrong.
     while len(pool) >= 2:
         worst = max(pool, key=distance)
-        if deviation(worst) <= HEADLINE_PLAUSIBILITY_SHARE:
+        if deviation(worst) <= share:
             break
         if len(pool) == 2:
             flagged.update({vendor_id: others_median(vendor_id) for vendor_id in pool})
             break
         flagged[worst] = others_median(worst)
         del pool[worst]
-    return [
-        f"{vendor_id}: headline price EUR {headlines[vendor_id]:,.2f} is far from the median of the other bids "
-        f"(EUR {flagged[vendor_id]:,.2f}); check the cited passage"
-        for vendor_id in headlines if vendor_id in flagged
-    ]
+    return flagged
+
+
+# An evaluated price (headline plus priced gaps) this far from the median of the others' gets a warning.
+# Tighter than the headline rule: the headlines already agreed, so a spread this wide is the gaps talking.
+EVALUATED_OUTLIER_SHARE = 0.25
+
+
+def _outlying_evaluated(financials: list[dict], headlines: dict[str, float | None]) -> list[str]:
+    """Warn when a bid's evaluated price stands far from the others' though its headline did not.
+
+    This is the bid whose price looked in line until its gaps were priced. A vendor whose headline was
+    already flagged is left out: that warning explains the difference. A price with unpriced gaps is a
+    lower bound, and the message says so.
+    """
+    headline_flagged = _outliers(headlines, HEADLINE_PLAUSIBILITY_SHARE)
+    evaluated = {f["vendor_id"]: f["true_evaluated_price"] for f in financials
+                 if f["vendor_id"] not in headline_flagged}
+    flagged = _outliers(evaluated, EVALUATED_OUTLIER_SHARE)
+    status = {f["vendor_id"]: f["price_status"] for f in financials}
+    messages = []
+    for f in financials:
+        vendor_id = f["vendor_id"]
+        if vendor_id not in flagged:
+            continue
+        price, middle = f["true_evaluated_price"], flagged[vendor_id]
+        direction = "above" if price > middle else "below"
+        bound = "at least " if status[vendor_id] == "UNPRICED_ITEMS" else ""
+        messages.append(
+            f"{vendor_id}: evaluated price {bound}EUR {price:,.2f} (headline plus priced gaps) is "
+            f"{abs(price - middle) / middle:.0%} {direction} the median of the other bids' evaluated prices "
+            f"(EUR {middle:,.2f}); its priced gaps drive the difference")
+    return messages
 
 
 def _cell(resolution: Resolution, pricing: Pricing) -> engine.ExtractedParameter:
@@ -716,6 +755,7 @@ def stage_leveled(bodies: dict) -> dict:
     # The risk hidden in the cheapest-looking bid: the adders of the lowest headline.
     financials = engine.evaluate_vendor_financials(tender, engine.SensitivitySettings(), [])
     exposed = next((f["total_adders"] for f in financials if f["vendor_id"] == apparent_low), 0.0)
+    warnings.extend(_outlying_evaluated(financials, {vid: h["amount"] for vid, h in resolved["headlines"].items()}))
     stats = {
         "tender_id": tender.id,
         "documents": len(manifest.documents),

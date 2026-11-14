@@ -283,6 +283,26 @@ def unpriced_class(pack: Pack, rng: random.Random) -> None:
     pack.expected["unpriced_class"] = {"vendor_id": vendor_id, "class": "PARAM-02.current_short"}
 
 
+@operator
+def costly_gap(pack: Pack, rng: random.Random) -> None:
+    """The busbar copper estimate is ten times larger, so vendor-b's aluminium-for-copper gap prices at
+    137,620.00. Its headline is in line with the others; its evaluated price is far above them, and a
+    warning says so."""
+    cell = pack.cell("vendor-b", "PARAM-02")
+    if cell["status"] != "DEVIATION_DOWNGRADE" or pack.expected["vendors"]["vendor-b"]["headline_price"] is None:
+        raise MutationError("vendor-b's busbar gap or headline price is gone")
+    kg = 16000
+    pack.manifest["engineering_estimates"]["busbar_cu_kg"] = kg
+    new = kg * 8.50 + 1620.00  # rate table: Cu-Al price delta per kg, plus the bimetallic joint kit
+    change = new - float(cell["adder"])
+    cell["adder"] = f"{new:.2f}"
+    vendor = pack.expected["vendors"]["vendor-b"]
+    vendor["total_adders"] = f"{float(vendor['total_adders']) + change:.2f}"
+    vendor["true_evaluated_price"] = f"{float(vendor['true_evaluated_price']) + change:.2f}"
+    pack.expect_warning("vendor-b: evaluated price at least EUR")
+    pack.expected.pop("clawback", None)  # the round-3 concession includes the busbar gap
+
+
 def _readable_bids(pack: Pack) -> list[str]:
     return [v for v in pack.vendor_ids() if pack.file_of(v) in pack.expected["ideal_locate"]]
 
