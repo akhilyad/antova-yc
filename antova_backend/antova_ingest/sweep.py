@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from antova_ingest.ontology import PARAMETERS, ParameterDef
+from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, PARAMETERS_BY_CLASS, ParameterDef, parameters_for
 from antova_ingest.parse import MIN_QUOTE_WORDS, citation_for_span, normalize, page_sentences, words_text
 from antova_ingest.types import Citation, FieldKind, ParsedDocument
 from antova_ingest.values import NEGATIVE_CONTEXT, clauses
@@ -39,8 +39,9 @@ SIGNALS: dict[FieldKind, re.Pattern] = {
                            r"delivered duty paid|free carrier", re.IGNORECASE),
     "months": re.compile(r"\d+\s*-?\s*months?\b", re.IGNORECASE),
 }
-_TERMS: dict[str, re.Pattern] = {
-    p.id: re.compile("|".join(f"(?:{term})" for term in p.sweep_terms), re.IGNORECASE) for p in PARAMETERS
+_TERMS: dict[ParameterDef, re.Pattern] = {
+    p: re.compile("|".join(f"(?:{term})" for term in p.sweep_terms), re.IGNORECASE)
+    for params in PARAMETERS_BY_CLASS.values() for p in params
 }
 
 
@@ -65,12 +66,12 @@ def names_parameter(param: ParameterDef, sentence: str) -> bool:
     filter still carries a sweep term and something value-shaped."""
     for f in param.fields:
         text = _text_for(f.name, sentence)
-        if _TERMS[param.id].search(text) and SIGNALS[f.kind].search(text):
+        if _TERMS[param].search(text) and SIGNALS[f.kind].search(text):
             return True
     return False
 
 
-def sweep_document(doc: ParsedDocument) -> list[SweepHit]:
+def sweep_document(doc: ParsedDocument, equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> list[SweepHit]:
     """Every sentence of the document that states something value-shaped about a parameter."""
     hits: list[SweepHit] = []
     for page in doc.pages:
@@ -81,7 +82,7 @@ def sweep_document(doc: ParsedDocument) -> list[SweepHit]:
                 continue
             citation = None
             sentence = words_text(page.words[first: last + 1])
-            for param in PARAMETERS:
+            for param in parameters_for(equipment_class):
                 if names_parameter(param, sentence):
                     citation = citation or citation_for_span(doc, page, first, last)
                     hits.append(SweepHit(param.id, citation))

@@ -120,6 +120,28 @@ PARAMETERS: tuple[ParameterDef, ...] = (
 
 PARAMS_BY_ID: dict[str, ParameterDef] = {p.id: p for p in PARAMETERS}
 
+# One parameter set per equipment class. PARAMETERS and PARAMS_BY_ID above stay as the
+# default class's names; code that holds a manifest asks for its own class instead.
+DEFAULT_EQUIPMENT_CLASS = "mv_gis_switchgear"
+PARAMETERS_BY_CLASS: dict[str, tuple[ParameterDef, ...]] = {DEFAULT_EQUIPMENT_CLASS: PARAMETERS}
+
+
+class UnknownEquipmentClass(ValueError):
+    pass
+
+
+def parameters_for(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> tuple[ParameterDef, ...]:
+    try:
+        return PARAMETERS_BY_CLASS[equipment_class]
+    except KeyError:
+        known = ", ".join(sorted(PARAMETERS_BY_CLASS))
+        raise UnknownEquipmentClass(
+            f"no parameters defined for equipment class {equipment_class!r} (known: {known})") from None
+
+
+def params_by_id_for(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> dict[str, ParameterDef]:
+    return {p.id: p for p in parameters_for(equipment_class)}
+
 # Declared orders for classed values, weakest first, from the buyer's side. A field with
 # operator "ord" passes when the offered value is at or above the required one in its order.
 ORDINALS: dict[str, tuple[str, ...]] = {

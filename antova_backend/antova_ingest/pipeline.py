@@ -24,7 +24,9 @@ from antova_ingest import artifacts, codec, config, costs, extract, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
-from antova_ingest.ontology import PARAMETERS, PARAMS_BY_ID, SECTION_LABELS
+from antova_ingest.ontology import (
+    DEFAULT_EQUIPMENT_CLASS, SECTION_LABELS, UnknownEquipmentClass, params_by_id_for, parameters_for,
+)
 from antova_ingest.parse import (
     citation_for_span,
     page_sentences,
@@ -186,6 +188,15 @@ def _manifest(bodies: dict) -> TenderManifest:
     return TenderManifest.model_validate(bodies["parsed"]["manifest"])
 
 
+def _params(bodies: dict):
+    """The parameters of the tender's equipment class, in ontology order."""
+    return parameters_for(_manifest(bodies).equipment_class)
+
+
+def _params_by_id(bodies: dict):
+    return params_by_id_for(_manifest(bodies).equipment_class)
+
+
 def _documents(bodies: dict, manifest: TenderManifest) -> dict[str, ParsedDocument]:
     """The readable documents, rebuilt from the parsed artifact, with the locator's section labels."""
     by_file = {d["file"]: d for d in bodies["parsed"]["documents"]}
@@ -207,6 +218,10 @@ def _failed_vendors(bodies: dict, manifest: TenderManifest) -> set[str]:
 
 
 def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
+    try:
+        parameters_for(manifest.equipment_class)
+    except UnknownEquipmentClass as exc:
+        raise IngestFailed(str(exc)) from exc
     documents: list[dict] = []
     warnings: list[str] = []
     for entry in manifest.documents:
@@ -291,6 +306,7 @@ def _responses(bodies: dict) -> dict[str, extract.LocateResponse]:
 
 def stage_verified(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     docs = _documents(bodies, manifest)
     responses = _responses(bodies)
     for file, response in responses.items():
@@ -304,10 +320,10 @@ def stage_verified(bodies: dict) -> dict:
     def anchored(file: str, param_id: str, citation: Citation) -> Citation:
         """Number in span: a quote that states no value itself (the carve-out half of a note) is
         widened to its whole paragraph when the value is there, so what is cited is what is read."""
-        if read_values(param_id, citation, locales[file])[0]:
+        if read_values(param_id, citation, locales[file], manifest.equipment_class)[0]:
             return citation
         whole = verify_quote(docs[file], citation.page, citation.paragraph)
-        if whole is not None and read_values(param_id, whole, locales[file])[0]:
+        if whole is not None and read_values(param_id, whole, locales[file], manifest.equipment_class)[0]:
             return whole
         return citation
 
@@ -317,7 +333,7 @@ def stage_verified(bodies: dict) -> dict:
         rows = []
         for candidate in response.candidates:
             citation = (verify_quote(docs[file], candidate.page, candidate.quote)
-                        if candidate.param_id in PARAMS_BY_ID else None)
+                        if candidate.param_id in by_id else None)
             if citation is None:
                 rejected += 1
                 continue
@@ -353,7 +369,7 @@ def stage_verified(bodies: dict) -> dict:
     sweep_hits: dict[str, list[dict]] = {}
     located = refound = new = 0
     for file in responses:
-        hits = sweep.sweep_document(docs[file])
+        hits = sweep.sweep_document(docs[file], manifest.equipment_class)
         sweep_hits[file] = [{"param_id": h.param_id, "page": h.citation.page, "quote": h.citation.quote} for h in hits]
         cited = [(row["param_id"], Citation.from_dict(row["citation"])) for row in citations[file]]
         located += len(cited)
@@ -390,7 +406,8 @@ def _page_ranges(pages: list[int]) -> str:
 _NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fat_days", "months"})
 
 
-def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, list[dict]]:
+def read_values(param_id: str, citation: Citation, locale: str,
+                equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> tuple[dict, list[dict]]:
     """The typed values a cited span states for a parameter, and notes on anything not believed.
 
     Values are read from the span's own text and nowhere else. A number that could be read two
@@ -401,7 +418,7 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
     values: dict = {}
     notes: list[dict] = []
     where = f"p.{citation.page}"
-    for f in PARAMS_BY_ID[param_id].fields:
+    for f in params_by_id_for(equipment_class)[param_id].fields:
         value = parse_field(f.kind, text, f.name)
         if value is None:
             continue
@@ -416,7 +433,7 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
                                      f"{low} to {high}; value not read"})
             continue
         values[f.name] = value
-    unread = [f for f in PARAMS_BY_ID[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
+    unread = [f for f in params_by_id_for(equipment_class)[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
     if ambiguous and unread:
         notes.append({"code": "AMBIGUOUS_NUMBER",
                       "message": f"ambiguous number {', '.join(repr(t) for t in ambiguous)} on {where}: nothing in the "
@@ -426,6 +443,7 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
 
 def stage_resolved(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    equipment_class = manifest.equipment_class
     verified = bodies["verified"]
     warnings: list[str] = []
     mr_entry = next(d for d in manifest.documents if d.role == "mr_spec")
@@ -441,7 +459,7 @@ def stage_resolved(bodies: dict) -> dict:
             citation = Citation.from_dict(row["citation"])
             # Values come from the cited span's own text (the verified stage has already widened
             # a fragment to the paragraph that holds its value).
-            values, notes = read_values(row["param_id"], citation, locales[file])
+            values, notes = read_values(row["param_id"], citation, locales[file], equipment_class)
             for note in notes:
                 if file in vendor_of:
                     add_flag(flags.setdefault(_key(vendor_of[file], row["param_id"]), []), note["code"], note["message"])
@@ -509,7 +527,7 @@ def stage_resolved(bodies: dict) -> dict:
     mr_evidence = evidence.get(mr_entry.file, [])
     requirements: dict[str, dict] = {}
     requirement_citations: dict[str, list[dict]] = {}
-    for param in PARAMETERS:
+    for param in parameters_for(equipment_class):
         mine = sorted((e for e in mr_evidence if e.param_id == param.id), key=lambda e: e.citation.page)
         merged = merge_requirement(param, mine)
         if any(f.name not in merged for f in param.fields):
@@ -531,11 +549,12 @@ def stage_resolved(bodies: dict) -> dict:
 def _requirements(bodies: dict) -> dict[str, dict]:
     """param_id -> {field: FieldValue}, in ontology order."""
     stored = bodies["resolved"]["requirements"]
-    return {p.id: codec.values_from_plain(stored[p.id]) for p in PARAMETERS if p.id in stored}
+    return {p.id: codec.values_from_plain(stored[p.id]) for p in _params(bodies) if p.id in stored}
 
 
 def stage_checked(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     failed = _failed_vendors(bodies, manifest)
     requirements = _requirements(bodies)
     stored = bodies["resolved"]["evidence"]
@@ -554,7 +573,7 @@ def stage_checked(bodies: dict) -> dict:
         located_params = {row["param_id"] for row in bodies["verified"]["citations"].get(entry.file, [])
                           if row["source"] == "locator"}
         for param_id, requirement in requirements.items():
-            resolution = resolve(PARAMS_BY_ID[param_id], requirement, vendor_evidence, entry.vendor_id,
+            resolution = resolve(by_id[param_id], requirement, vendor_evidence, entry.vendor_id,
                                  lag=lag, warranty_policy=warranty_policy)
             key = _key(entry.vendor_id, param_id)
             for extra in bodies["resolved"]["flags"].get(key, []):
@@ -581,6 +600,7 @@ def stage_checked(bodies: dict) -> dict:
 
 def stage_priced(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     warnings: list[str] = []
     table = load_rate_table(manifest.rate_table)
     quantities = {f"estimate.{k}": Decimal(v) for k, v in manifest.engineering_estimates.items()}
@@ -593,7 +613,7 @@ def stage_priced(bodies: dict) -> dict:
     pricings = {}
     for key, data in bodies["checked"]["resolutions"].items():
         param_id = key.split("|", 1)[1]
-        pricing = price(PARAMS_BY_ID[param_id], requirements[param_id], codec.resolution_from_plain(data),
+        pricing = price(by_id[param_id], requirements[param_id], codec.resolution_from_plain(data),
                         table, quantities)
         pricings[key] = codec.pricing_to_plain(pricing)
     return {
@@ -637,7 +657,7 @@ def stage_leveled(bodies: dict) -> dict:
     ]
     parameters = []
     for param_id, requirement in requirements.items():
-        param = PARAMS_BY_ID[param_id]
+        param = _params_by_id(bodies)[param_id]
         mine = resolved["requirement_citations"][param_id]
         quotes = list(dict.fromkeys(c["quote"] for c in mine))
         parameters.append(engine.EngineeringParameter(
