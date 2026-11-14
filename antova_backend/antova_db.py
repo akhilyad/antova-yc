@@ -22,6 +22,7 @@ Antova Database & Repository Layer (schema v8)
 - v7 adds `adder_overrides.set_by` and `tenders.verified_by`: the reviewer ID the server took from
   the request's token. Both are NULL for rows that predate v7.
 - v8 adds `tenders.verified_run_id`: the ingest run that was verified (NULL before v8).
+- v9 adds `tenders.project`: the buyer-entered project baseline as JSON (NULL when the manifest has none).
 """
 
 import json
@@ -44,7 +45,7 @@ import antova_engine as engine_models
 log = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("ANTOVA_DATABASE_URL", "sqlite:///./antova_enterprise.db")
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 LEGACY_TABLES = ("extracted_parameters", "parameters", "vendors", "tenders")
 TENDER_STATUSES = ("DRAFT", "VERIFIED")
 
@@ -120,6 +121,7 @@ class TenderRecord(Base):
     synthetic = Column(Boolean, nullable=False, default=False)
     ingest_stats = Column(Text, nullable=False, default="{}")
     stage_log = Column(Text, nullable=False, default="[]")
+    project = Column(Text, nullable=True)  # JSON of the buyer-entered baseline, or NULL
 
 
 class AdderOverrideRecord(Base):
@@ -405,6 +407,7 @@ class TenderRepository:
             record.synthetic = synthetic
             record.ingest_stats = _dump(ingest_stats or {})
             record.stage_log = _dump(stage_log or [])
+            record.project = _dump(tender.project) if tender.project else None
             self.db.add(record)
             # No relationship() links these tables, so SQLAlchemy does not order the inserts by foreign
             # key. Write the tender row first: every row below points at it.
@@ -520,6 +523,7 @@ class TenderRepository:
             id=record.id, title=record.title, client=record.client, mr_doc=record.mr_doc,
             pages_parsed=record.pages_parsed, latency_sec=record.latency_sec, compute_cogs=record.compute_cogs,
             equipment_class=record.equipment_class, rate_table_version=record.rate_table_version,
+            project=_load(record.project),
             vendors=[engine_models.Vendor(
                 id=v.id, name=v.name, country=v.country, headline_price=v.headline_price or None,
                 doc_name=v.doc_name, cover_claim=v.cover_claim, badge=v.badge,
@@ -791,6 +795,11 @@ def _upgrade_v7_to_v8(conn: Connection) -> None:
     _add_missing_columns(conn, "tenders", {"verified_run_id": "VARCHAR(64)"})
 
 
+def _upgrade_v8_to_v9(conn: Connection) -> None:
+    """Add tenders.project (NULL for rows that exist). The caller records the version."""
+    _add_missing_columns(conn, "tenders", {"project": "TEXT"})
+
+
 def _upgrade_v6_to_v7(conn: Connection) -> None:
     """Add the reviewer columns (NULL for rows that exist). The caller records the version."""
     _add_missing_columns(conn, "adder_overrides", {"set_by": "VARCHAR(64)"})
@@ -851,9 +860,11 @@ def init_db(bind: Optional[Engine] = None) -> None:
             _upgrade_v5_to_v6(conn)  # a v3 database already has adder_overrides, without the columns
             _upgrade_v6_to_v7(conn)
             _upgrade_v7_to_v8(conn)
+            _upgrade_v8_to_v9(conn)
+            _write_version(conn)
         check_foreign_keys(bind)
         return
-    if version in (4, 5, 6, 7):
+    if version in (4, 5, 6, 7, 8):
         with bind.begin() as conn:
             if conn.dialect.name == "sqlite":
                 conn.exec_driver_sql("BEGIN")  # see the v2/v3 branch: the ALTER must roll back too
@@ -863,7 +874,9 @@ def init_db(bind: Optional[Engine] = None) -> None:
                 _upgrade_v5_to_v6(conn)
             if version < 7:
                 _upgrade_v6_to_v7(conn)
-            _upgrade_v7_to_v8(conn)
+            if version < 8:
+                _upgrade_v7_to_v8(conn)
+            _upgrade_v8_to_v9(conn)
             _write_version(conn)
         check_foreign_keys(bind)
         return

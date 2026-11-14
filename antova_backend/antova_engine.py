@@ -115,6 +115,8 @@ class TenderPackage(BaseModel):
     parameters: List[EngineeringParameter]
     equipment_class: str = ""
     rate_table_version: str = ""
+    # The buyer-entered project baseline ({field: {"value", "source", "note"}}), or None.
+    project: Optional[Dict[str, Any]] = None
 
 
 class SensitivitySettings(BaseModel):

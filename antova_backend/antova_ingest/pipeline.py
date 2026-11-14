@@ -242,7 +242,12 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
                 f"{entry.file}: {len(blank)} of {len(doc.pages)} pages {'has' if len(blank) == 1 else 'have'} no text "
                 f"layer (p.{_page_ranges(blank)}); evidence there cannot be read (OCR is not supported)")
         documents.append(codec.document_to_plain(doc))
-    return {"manifest": manifest.model_dump(mode="json"), "documents": documents, "warnings": warnings}
+    dumped = manifest.model_dump(mode="json")
+    if manifest.project is None:
+        del dumped["project"]  # a manifest without a baseline stores exactly what it did before the field existed
+    else:
+        dumped["project"] = manifest.project.model_dump(mode="json", exclude_none=True)
+    return {"manifest": dumped, "documents": documents, "warnings": warnings}
 
 
 def stage_located(bodies: dict, locator: Locator) -> dict:
@@ -676,6 +681,7 @@ def stage_leveled(bodies: dict) -> dict:
         pages_parsed=sum(page_counts.values()), latency_sec=0, compute_cogs=float(cost),
         vendors=vendors, parameters=parameters,
         equipment_class=manifest.equipment_class, rate_table_version=table["version"],
+        project=(manifest.project.model_dump(mode="json", exclude_none=True) if manifest.project else None),
     )
 
     # Amendment A2: negotiate with the lowest true evaluated price, not the lowest headline.
