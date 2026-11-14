@@ -35,6 +35,10 @@ def value_to_plain(value: FieldValue) -> dict:
         data["quantity"] = [raw.magnitude, value.display.split(" ", 1)[1]]
     elif isinstance(raw, IPCode):
         data["ip"] = [raw.solid, raw.liquid]
+    elif isinstance(raw, Decimal):
+        data["decimal"] = str(raw)
+    elif isinstance(raw, tuple):
+        data["items"] = list(raw)
     else:
         data["value"] = raw
     for name in ("qualifier",):
@@ -49,6 +53,10 @@ def value_from_plain(data: dict) -> FieldValue:
         raw: Any = Q_(magnitude, PINT_UNITS[unit])
     elif "ip" in data:
         raw = IPCode(*data["ip"])
+    elif "decimal" in data:
+        raw = Decimal(data["decimal"])
+    elif "items" in data:
+        raw = tuple(data["items"])
     else:
         raw = data["value"]
     extra = {name: data[name] for name in ("qualifier",) if name in data}

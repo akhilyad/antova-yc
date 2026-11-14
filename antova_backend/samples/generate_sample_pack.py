@@ -19,13 +19,13 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
 
-from samples import scenario, scenario_417
+from samples import scenario, scenario_417, scenario_418
 
 SAMPLES_DIR = Path(__file__).resolve().parent
 DEFAULT_OUT = SAMPLES_DIR / scenario.TENDER_ID
 # Every pack module offers TENDER_ID, documents(), manifest() and expected();
 # raw_files() is optional and returns files written as they are (an unreadable bid).
-PACKS = {module.TENDER_ID: module for module in (scenario, scenario_417)}
+PACKS = {module.TENDER_ID: module for module in (scenario, scenario_417, scenario_418)}
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 56

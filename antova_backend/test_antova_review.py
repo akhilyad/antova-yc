@@ -134,7 +134,8 @@ def test_brief_payload_keys_and_override_shape():
     assert payload["ingest_stats"] == {"pages": 22}
     assert payload["stage_log"] == [{"stage": "parse", "ms": 120}]
     assert payload["documents"] == documents
-    assert payload["tender"] == tender.model_dump(mode="json")
+    # A tender with no project baseline is served without the key, as before the field existed.
+    assert payload["tender"] == tender.model_dump(mode="json", exclude={"project", "findings"})
 
     # Sorted by (param_id, vendor_id); adder_eur always a two-decimal string.
     assert payload["overrides"] == [

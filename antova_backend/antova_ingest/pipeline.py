@@ -20,11 +20,13 @@ from typing import Callable
 import anthropic
 
 import antova_engine as engine
-from antova_ingest import artifacts, codec, config, costs, extract, sweep
+from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
-from antova_ingest.ontology import PARAMETERS, PARAMS_BY_ID, SECTION_LABELS
+from antova_ingest.ontology import (
+    DEFAULT_EQUIPMENT_CLASS, FINDINGS_CLASSES, SECTION_LABELS, UnknownEquipmentClass, params_by_id_for, parameters_for,
+)
 from antova_ingest.parse import (
     citation_for_span,
     page_sentences,
@@ -42,7 +44,7 @@ from antova_ingest.types import (
 )
 from antova_ingest.values import (
     detect_locale, normalize_numbers, parse_bay_count, parse_commissioning_lag, parse_field, read_price, plausible, rule_text,
-    value_in_span,
+    standard_exception, value_in_span,
 )
 
 STAGES = [
@@ -111,7 +113,18 @@ def _implausible_headlines(headlines: dict[str, float | None]) -> list[str]:
     A misread price (a unit rate taken for the total, a dropped thousands group) is usually off
     by far more than that. The price is reported as read; only a person corrects it.
     """
-    pool = {vendor_id: value for vendor_id, value in headlines.items() if value}
+    flagged = _outliers(headlines, HEADLINE_PLAUSIBILITY_SHARE)
+    return [
+        f"{vendor_id}: headline price EUR {headlines[vendor_id]:,.2f} is far from the median of the other bids "
+        f"(EUR {flagged[vendor_id]:,.2f}); check the cited passage"
+        for vendor_id in headlines if vendor_id in flagged
+    ]
+
+
+def _outliers(values: dict[str, float | None], share: float) -> dict[str, float]:
+    """The vendors whose value deviates by more than `share` from the median of the other bids' values,
+    each with the median it was compared with. Unknown values (None or 0) take no part."""
+    pool = {vendor_id: value for vendor_id, value in values.items() if value}
     flagged: dict[str, float] = {}  # vendor -> the median it was compared with
 
     def others_median(vendor_id: str) -> float:
@@ -132,18 +145,46 @@ def _implausible_headlines(headlines: dict[str, float | None]) -> list[str]:
     # disagree are both flagged: nothing says which one is wrong.
     while len(pool) >= 2:
         worst = max(pool, key=distance)
-        if deviation(worst) <= HEADLINE_PLAUSIBILITY_SHARE:
+        if deviation(worst) <= share:
             break
         if len(pool) == 2:
             flagged.update({vendor_id: others_median(vendor_id) for vendor_id in pool})
             break
         flagged[worst] = others_median(worst)
         del pool[worst]
-    return [
-        f"{vendor_id}: headline price EUR {headlines[vendor_id]:,.2f} is far from the median of the other bids "
-        f"(EUR {flagged[vendor_id]:,.2f}); check the cited passage"
-        for vendor_id in headlines if vendor_id in flagged
-    ]
+    return flagged
+
+
+# An evaluated price (headline plus priced gaps) this far from the median of the others' gets a warning.
+# Tighter than the headline rule: the headlines already agreed, so a spread this wide is the gaps talking.
+EVALUATED_OUTLIER_SHARE = 0.25
+
+
+def _outlying_evaluated(financials: list[dict], headlines: dict[str, float | None]) -> list[str]:
+    """Warn when a bid's evaluated price stands far from the others' though its headline did not.
+
+    This is the bid whose price looked in line until its gaps were priced. A vendor whose headline was
+    already flagged is left out: that warning explains the difference. A price with unpriced gaps is a
+    lower bound, and the message says so.
+    """
+    headline_flagged = _outliers(headlines, HEADLINE_PLAUSIBILITY_SHARE)
+    evaluated = {f["vendor_id"]: f["true_evaluated_price"] for f in financials
+                 if f["vendor_id"] not in headline_flagged}
+    flagged = _outliers(evaluated, EVALUATED_OUTLIER_SHARE)
+    status = {f["vendor_id"]: f["price_status"] for f in financials}
+    messages = []
+    for f in financials:
+        vendor_id = f["vendor_id"]
+        if vendor_id not in flagged:
+            continue
+        price, middle = f["true_evaluated_price"], flagged[vendor_id]
+        direction = "above" if price > middle else "below"
+        bound = "at least " if status[vendor_id] == "UNPRICED_ITEMS" else ""
+        messages.append(
+            f"{vendor_id}: evaluated price {bound}EUR {price:,.2f} (headline plus priced gaps) is "
+            f"{abs(price - middle) / middle:.0%} {direction} the median of the other bids' evaluated prices "
+            f"(EUR {middle:,.2f}); its priced gaps drive the difference")
+    return messages
 
 
 def _cell(resolution: Resolution, pricing: Pricing) -> engine.ExtractedParameter:
@@ -186,6 +227,15 @@ def _manifest(bodies: dict) -> TenderManifest:
     return TenderManifest.model_validate(bodies["parsed"]["manifest"])
 
 
+def _params(bodies: dict):
+    """The parameters of the tender's equipment class, in ontology order."""
+    return parameters_for(_manifest(bodies).equipment_class)
+
+
+def _params_by_id(bodies: dict):
+    return params_by_id_for(_manifest(bodies).equipment_class)
+
+
 def _documents(bodies: dict, manifest: TenderManifest) -> dict[str, ParsedDocument]:
     """The readable documents, rebuilt from the parsed artifact, with the locator's section labels."""
     by_file = {d["file"]: d for d in bodies["parsed"]["documents"]}
@@ -207,6 +257,14 @@ def _failed_vendors(bodies: dict, manifest: TenderManifest) -> set[str]:
 
 
 def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
+    try:
+        parameters_for(manifest.equipment_class)
+    except UnknownEquipmentClass as exc:
+        raise IngestFailed(str(exc)) from exc
+    table_class = load_rate_table(manifest.rate_table).equipment_class
+    if table_class != manifest.equipment_class:
+        raise IngestFailed(f"rate table {manifest.rate_table!r} prices equipment class {table_class!r}, "
+                           f"but the manifest names {manifest.equipment_class!r}")
     documents: list[dict] = []
     warnings: list[str] = []
     for entry in manifest.documents:
@@ -227,7 +285,12 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
                 f"{entry.file}: {len(blank)} of {len(doc.pages)} pages {'has' if len(blank) == 1 else 'have'} no text "
                 f"layer (p.{_page_ranges(blank)}); evidence there cannot be read (OCR is not supported)")
         documents.append(codec.document_to_plain(doc))
-    return {"manifest": manifest.model_dump(mode="json"), "documents": documents, "warnings": warnings}
+    dumped = manifest.model_dump(mode="json")
+    if manifest.project is None:
+        del dumped["project"]  # a manifest without a baseline stores exactly what it did before the field existed
+    else:
+        dumped["project"] = manifest.project.model_dump(mode="json", exclude_none=True)
+    return {"manifest": dumped, "documents": documents, "warnings": warnings}
 
 
 def stage_located(bodies: dict, locator: Locator) -> dict:
@@ -291,6 +354,7 @@ def _responses(bodies: dict) -> dict[str, extract.LocateResponse]:
 
 def stage_verified(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     docs = _documents(bodies, manifest)
     responses = _responses(bodies)
     for file, response in responses.items():
@@ -304,10 +368,10 @@ def stage_verified(bodies: dict) -> dict:
     def anchored(file: str, param_id: str, citation: Citation) -> Citation:
         """Number in span: a quote that states no value itself (the carve-out half of a note) is
         widened to its whole paragraph when the value is there, so what is cited is what is read."""
-        if read_values(param_id, citation, locales[file])[0]:
+        if read_values(param_id, citation, locales[file], manifest.equipment_class)[0]:
             return citation
         whole = verify_quote(docs[file], citation.page, citation.paragraph)
-        if whole is not None and read_values(param_id, whole, locales[file])[0]:
+        if whole is not None and read_values(param_id, whole, locales[file], manifest.equipment_class)[0]:
             return whole
         return citation
 
@@ -317,7 +381,7 @@ def stage_verified(bodies: dict) -> dict:
         rows = []
         for candidate in response.candidates:
             citation = (verify_quote(docs[file], candidate.page, candidate.quote)
-                        if candidate.param_id in PARAMS_BY_ID else None)
+                        if candidate.param_id in by_id else None)
             if citation is None:
                 rejected += 1
                 continue
@@ -353,7 +417,7 @@ def stage_verified(bodies: dict) -> dict:
     sweep_hits: dict[str, list[dict]] = {}
     located = refound = new = 0
     for file in responses:
-        hits = sweep.sweep_document(docs[file])
+        hits = sweep.sweep_document(docs[file], manifest.equipment_class)
         sweep_hits[file] = [{"param_id": h.param_id, "page": h.citation.page, "quote": h.citation.quote} for h in hits]
         cited = [(row["param_id"], Citation.from_dict(row["citation"])) for row in citations[file]]
         located += len(cited)
@@ -387,10 +451,12 @@ def _page_ranges(pages: list[int]) -> str:
     return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in ranges)
 
 
-_NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fat_days", "months"})
+_NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fat_days", "months",
+                            "lead_time", "percent", "money_cap", "altitude"})
 
 
-def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, list[dict]]:
+def read_values(param_id: str, citation: Citation, locale: str,
+                equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> tuple[dict, list[dict]]:
     """The typed values a cited span states for a parameter, and notes on anything not believed.
 
     Values are read from the span's own text and nowhere else. A number that could be read two
@@ -401,9 +467,14 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
     values: dict = {}
     notes: list[dict] = []
     where = f"p.{citation.page}"
-    for f in PARAMS_BY_ID[param_id].fields:
+    for f in params_by_id_for(equipment_class)[param_id].fields:
         value = parse_field(f.kind, text, f.name)
         if value is None:
+            if f.kind == "standard" and standard_exception(text):
+                # Read as nothing (an exception is not compliance), but say why, so the cell does not look silent.
+                notes.append({"code": "STANDARD_EXCEPTION",
+                              "message": f"the passage on {where} states an exception or deviation from a standard; "
+                                         f"compliance is not read from it"})
             continue
         if not value_in_span(value, text):
             notes.append({"code": "VALUE_NOT_IN_SPAN",
@@ -416,7 +487,7 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
                                      f"{low} to {high}; value not read"})
             continue
         values[f.name] = value
-    unread = [f for f in PARAMS_BY_ID[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
+    unread = [f for f in params_by_id_for(equipment_class)[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
     if ambiguous and unread:
         notes.append({"code": "AMBIGUOUS_NUMBER",
                       "message": f"ambiguous number {', '.join(repr(t) for t in ambiguous)} on {where}: nothing in the "
@@ -426,6 +497,7 @@ def read_values(param_id: str, citation: Citation, locale: str) -> tuple[dict, l
 
 def stage_resolved(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    equipment_class = manifest.equipment_class
     verified = bodies["verified"]
     warnings: list[str] = []
     mr_entry = next(d for d in manifest.documents if d.role == "mr_spec")
@@ -441,7 +513,7 @@ def stage_resolved(bodies: dict) -> dict:
             citation = Citation.from_dict(row["citation"])
             # Values come from the cited span's own text (the verified stage has already widened
             # a fragment to the paragraph that holds its value).
-            values, notes = read_values(row["param_id"], citation, locales[file])
+            values, notes = read_values(row["param_id"], citation, locales[file], equipment_class)
             for note in notes:
                 if file in vendor_of:
                     add_flag(flags.setdefault(_key(vendor_of[file], row["param_id"]), []), note["code"], note["message"])
@@ -509,7 +581,7 @@ def stage_resolved(bodies: dict) -> dict:
     mr_evidence = evidence.get(mr_entry.file, [])
     requirements: dict[str, dict] = {}
     requirement_citations: dict[str, list[dict]] = {}
-    for param in PARAMETERS:
+    for param in parameters_for(equipment_class):
         mine = sorted((e for e in mr_evidence if e.param_id == param.id), key=lambda e: e.citation.page)
         merged = merge_requirement(param, mine)
         if any(f.name not in merged for f in param.fields):
@@ -531,11 +603,12 @@ def stage_resolved(bodies: dict) -> dict:
 def _requirements(bodies: dict) -> dict[str, dict]:
     """param_id -> {field: FieldValue}, in ontology order."""
     stored = bodies["resolved"]["requirements"]
-    return {p.id: codec.values_from_plain(stored[p.id]) for p in PARAMETERS if p.id in stored}
+    return {p.id: codec.values_from_plain(stored[p.id]) for p in _params(bodies) if p.id in stored}
 
 
 def stage_checked(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     failed = _failed_vendors(bodies, manifest)
     requirements = _requirements(bodies)
     stored = bodies["resolved"]["evidence"]
@@ -554,7 +627,7 @@ def stage_checked(bodies: dict) -> dict:
         located_params = {row["param_id"] for row in bodies["verified"]["citations"].get(entry.file, [])
                           if row["source"] == "locator"}
         for param_id, requirement in requirements.items():
-            resolution = resolve(PARAMS_BY_ID[param_id], requirement, vendor_evidence, entry.vendor_id,
+            resolution = resolve(by_id[param_id], requirement, vendor_evidence, entry.vendor_id,
                                  lag=lag, warranty_policy=warranty_policy)
             key = _key(entry.vendor_id, param_id)
             for extra in bodies["resolved"]["flags"].get(key, []):
@@ -581,6 +654,7 @@ def stage_checked(bodies: dict) -> dict:
 
 def stage_priced(bodies: dict) -> dict:
     manifest = _manifest(bodies)
+    by_id = params_by_id_for(manifest.equipment_class)
     warnings: list[str] = []
     table = load_rate_table(manifest.rate_table)
     quantities = {f"estimate.{k}": Decimal(v) for k, v in manifest.engineering_estimates.items()}
@@ -593,7 +667,7 @@ def stage_priced(bodies: dict) -> dict:
     pricings = {}
     for key, data in bodies["checked"]["resolutions"].items():
         param_id = key.split("|", 1)[1]
-        pricing = price(PARAMS_BY_ID[param_id], requirements[param_id], codec.resolution_from_plain(data),
+        pricing = price(by_id[param_id], requirements[param_id], codec.resolution_from_plain(data),
                         table, quantities)
         pricings[key] = codec.pricing_to_plain(pricing)
     return {
@@ -637,7 +711,7 @@ def stage_leveled(bodies: dict) -> dict:
     ]
     parameters = []
     for param_id, requirement in requirements.items():
-        param = PARAMS_BY_ID[param_id]
+        param = _params_by_id(bodies)[param_id]
         mine = resolved["requirement_citations"][param_id]
         quotes = list(dict.fromkeys(c["quote"] for c in mine))
         parameters.append(engine.EngineeringParameter(
@@ -656,7 +730,25 @@ def stage_leveled(bodies: dict) -> dict:
         pages_parsed=sum(page_counts.values()), latency_sec=0, compute_cogs=float(cost),
         vendors=vendors, parameters=parameters,
         equipment_class=manifest.equipment_class, rate_table_version=table["version"],
+        project=(manifest.project.model_dump(mode="json", exclude_none=True) if manifest.project else None),
     )
+
+    # A gap the table knowingly leaves to the findings register (an exposure) is accepted by a person,
+    # not priced by an override: the flag puts it in front of the review gate.
+    exposure_classes = load_rate_table(manifest.rate_table).exposure_classes
+    for param in tender.parameters:
+        for vendor_id, cell in param.vendors.items():
+            pricing = pricings[_key(vendor_id, param.id)]
+            if (pricing.pricing_status == "UNPRICED" and exposure_classes
+                    and set(pricing.unpriced_classes) <= exposure_classes):
+                add_flag(cell.flags, "EXPOSURE_GAP",
+                         "this gap is money at risk, not a price; the findings register shows the exposure. "
+                         "Approve it to accept the gap as shown, or set an adder if the buyer prices it")
+
+    if manifest.equipment_class in FINDINGS_CLASSES:
+        tender.findings = findings.build_findings(
+            tender, resolutions, requirements, project=tender.project,
+            estimates={name: Decimal(str(v)) for name, v in manifest.engineering_estimates.items()})
 
     # Amendment A2: negotiate with the lowest true evaluated price, not the lowest headline.
     choice = engine.negotiating_choice(tender)
@@ -675,6 +767,7 @@ def stage_leveled(bodies: dict) -> dict:
     # The risk hidden in the cheapest-looking bid: the adders of the lowest headline.
     financials = engine.evaluate_vendor_financials(tender, engine.SensitivitySettings(), [])
     exposed = next((f["total_adders"] for f in financials if f["vendor_id"] == apparent_low), 0.0)
+    warnings.extend(_outlying_evaluated(financials, {vid: h["amount"] for vid, h in resolved["headlines"].items()}))
     stats = {
         "tender_id": tender.id,
         "documents": len(manifest.documents),

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
+from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from antova_engine import ComplianceStatus, Criticality, TenderPackage  # noqa: F401
 
@@ -17,6 +18,7 @@ Section = Literal[
 FieldKind = Literal[
     "current", "duration", "voltage", "temperature", "material", "ip", "iac",
     "protocol", "marshalling", "fat_days", "incoterm", "months",
+    "lead_time", "percent", "money_cap", "altitude", "standard", "scope",
 ]
 
 
@@ -28,6 +30,46 @@ class DocumentEntry(BaseModel):
     country: str | None = None
 
 
+class BaselineDate(BaseModel):
+    """A project date the buyer typed in. It is a claim about the project, not read from a document,
+    so it is shown at the review gate until a person confirms it."""
+    model_config = ConfigDict(extra="forbid")
+    value: date
+    source: Literal["buyer_entered"] = "buyer_entered"
+    note: str | None = None
+
+
+class BaselineNumber(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: Decimal
+    source: Literal["buyer_entered"] = "buyer_entered"
+    note: str | None = None
+
+
+class ProjectBaseline(BaseModel):
+    """What the project needs, as the buyer states it. Every field is optional: an audit that
+    needs one it does not have says so (it never assumes a date)."""
+    model_config = ConfigDict(extra="forbid")
+    po_award_date: BaselineDate | None = None
+    required_on_site_date: BaselineDate | None = None
+    energization_date: BaselineDate | None = None
+    site_altitude_m: BaselineNumber | None = None
+    site_max_ambient_c: BaselineNumber | None = None
+
+    @model_validator(mode="after")
+    def _dates_in_order(self):
+        award, site = self.po_award_date, self.required_on_site_date
+        if award and site and site.value < award.value:
+            raise ValueError("required_on_site_date is before po_award_date")
+        if self.site_altitude_m is not None and not (-500 <= self.site_altitude_m.value <= 6000):
+            raise ValueError("site_altitude_m must be between -500 and 6000")
+        return self
+
+
+PROJECT_FIELDS = ("po_award_date", "required_on_site_date", "energization_date",
+                  "site_altitude_m", "site_max_ambient_c")
+
+
 class TenderManifest(BaseModel):
     tender_id: str
     title: str
@@ -37,6 +79,7 @@ class TenderManifest(BaseModel):
     documents: list[DocumentEntry]
     engineering_estimates: dict[str, Decimal]
     synthetic: bool = False
+    project: ProjectBaseline | None = None
 
 
 @dataclass(frozen=True)

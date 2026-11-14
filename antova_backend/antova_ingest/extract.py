@@ -23,7 +23,7 @@ from xml.sax.saxutils import escape
 import anthropic
 from pydantic import BaseModel, ValidationError
 
-from antova_ingest.ontology import PARAMETERS
+from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, PARAMETERS, parameters_for
 from antova_ingest.types import ParsedDocument
 
 MODEL = "test-model"
@@ -171,8 +171,10 @@ def api_cost_usd(input_tokens: int, output_tokens: int, price_input: Decimal = P
     return cost.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
-def build_system_prompt() -> str:
-    params = "\n".join(f"- {p.id} ({p.name}): {p.locate_hint}" for p in PARAMETERS)
+def build_system_prompt(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> str:
+    # The first class's parameters are the module constant, so a test can change the prompt by patching it.
+    parameters = PARAMETERS if equipment_class == DEFAULT_EQUIPMENT_CLASS else parameters_for(equipment_class)
+    params = "\n".join(f"- {p.id} ({p.name}): {p.locate_hint}" for p in parameters)
     return f"""You locate evidence in tender documents for an electrical equipment bid evaluation.
 You will receive one document: either the buyer's Material Requisition (MR spec) or one vendor's bid.
 Pages are wrapped as <page n="..." section="...">. Use the page numbers exactly as given.
@@ -251,23 +253,26 @@ def _attr(value: str) -> str:
     return '"' + escape(value, {'"': "&quot;"}) + '"'
 
 
-def prompt_fingerprint() -> str:
+def prompt_fingerprint(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> str:
     """Short hash of the system prompt, so any edit to it (a locate hint included) changes the replay key."""
-    return hashlib.sha256(build_system_prompt().encode("utf-8")).hexdigest()[:12]
+    prompt = build_system_prompt() if equipment_class == DEFAULT_EQUIPMENT_CLASS else build_system_prompt(equipment_class)
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
 class ResponseStore:
     """Saved answers, one file per (document, prompt, model). `model` is the model that answers, so a
     different model never replays another's answers; `salt` marks a prompt variant of that model."""
 
-    def __init__(self, directory: Path, model: str = MODEL, salt: str = ""):
+    def __init__(self, directory: Path, model: str = MODEL, salt: str = "",
+                 equipment_class: str = DEFAULT_EQUIPMENT_CLASS):
         self.directory = Path(directory)
         self.model = model
         self.salt = salt
+        self.equipment_class = equipment_class
 
     def key_for(self, doc: ParsedDocument) -> str:
         suffix = f"-{self.salt}" if self.salt else ""
-        return f"{doc.sha256}__{PROMPT_VERSION}-{prompt_fingerprint()}{suffix}__{self.model}"
+        return f"{doc.sha256}__{PROMPT_VERSION}-{prompt_fingerprint(self.equipment_class)}{suffix}__{self.model}"
 
     def _path(self, key: str) -> Path:
         return self.directory / f"{key}.json"
@@ -300,7 +305,7 @@ class ResponseStore:
             "model": self.model,
             "served_model": outcome.model or self.model,
             "prompt_version": PROMPT_VERSION,
-            "prompt_fingerprint": prompt_fingerprint(),
+            "prompt_fingerprint": prompt_fingerprint(self.equipment_class),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "usage": {"input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens},
             "response": outcome.response.model_dump(mode="json"),
@@ -338,7 +343,7 @@ class ModelLocator:
             raise MissingCredentials(filename)
 
     def _system(self) -> str:
-        return build_system_prompt()
+        return build_system_prompt(self.store.equipment_class)
 
     def locate(self, doc: ParsedDocument) -> LocateOutcome:
         key = self.store.key_for(doc)
@@ -456,6 +461,16 @@ def locate_provider() -> str:
     return "anthropic"
 
 
+def manifest_equipment_class(tender_dir: Path) -> str:
+    """The equipment class a tender folder's manifest names; the default class when it cannot be read
+    (the run itself fails on a broken manifest at intake)."""
+    try:
+        data = json.loads((Path(tender_dir) / "manifest.json").read_text(encoding="utf-8"))
+        return str(data.get("equipment_class") or DEFAULT_EQUIPMENT_CLASS)
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_EQUIPMENT_CLASS
+
+
 def make_locator(tender_dir: Path, mode: str):
     from antova_ingest import envfile
 
@@ -464,4 +479,5 @@ def make_locator(tender_dir: Path, mode: str):
         from antova_ingest.chat_locator import ChatCompletionsLocator
 
         return ChatCompletionsLocator.from_env(Path(tender_dir), mode)  # type: ignore[arg-type]
-    return ModelLocator(ResponseStore(Path(tender_dir) / "saved_responses"), mode)  # type: ignore[arg-type]
+    return ModelLocator(ResponseStore(Path(tender_dir) / "saved_responses",
+                                      equipment_class=manifest_equipment_class(tender_dir)), mode)  # type: ignore[arg-type]

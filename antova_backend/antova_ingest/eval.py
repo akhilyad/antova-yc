@@ -75,16 +75,19 @@ def _row(name: str, numbers: dict) -> dict:
     }
 
 
-def run(seeds: int = 3, out_dir: Path | None = None) -> list[dict]:
-    """One row per operator (plus the unmutated base pack and a total), each over `seeds` packs."""
+def run(seeds: int = 3, out_dir: Path | None = None, base: str = mutate.BASE_TENDER_ID) -> list[dict]:
+    """One row per operator (plus the unmutated base pack and a total), each over `seeds` packs.
+
+    `base` picks the pack the operators mutate: TENDER-2026-402, or TENDER-2026-418 (the extended
+    parameters), whose table also lists the operators written for PARAM-09..14."""
     out_dir = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="antova-eval-"))
     rows, grand = [], {}
-    for name in ["(base pack)", *sorted(mutate.OPERATORS)]:
+    for name in ["(base pack)", *sorted(mutate.operators_for(base))]:
         operators = [] if name == "(base pack)" else [name]
         numbers: dict = {}
         for seed in range(1 if not operators else seeds):
             try:
-                target = mutate.generate(operators, out_dir / f"{name.strip('()').replace(' ', '-')}-{seed}", seed)
+                target = mutate.generate(operators, out_dir / f"{name.strip('()').replace(' ', '-')}-{seed}", seed, base)
                 numbers = _add(numbers, evaluate_pack(target))
             except (mutate.MutationError, IngestFailed) as exc:
                 print(f"{name} seed {seed}: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -109,9 +112,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m antova_ingest.eval", description=__doc__.splitlines()[0])
     parser.add_argument("--seeds", type=int, default=3, help="packs generated per operator (default 3)")
     parser.add_argument("--json", action="store_true", help="print the rows as JSON instead of a table")
+    parser.add_argument("--base", default=mutate.BASE_TENDER_ID,
+                        choices=[mutate.BASE_TENDER_ID, mutate.EXTENDED_BASE_TENDER_ID],
+                        help="the pack the operators mutate: TENDER-2026-402 (default) or TENDER-2026-418, "
+                             "the extended parameters")
     args = parser.parse_args(argv)
     started = time.perf_counter()
-    rows = run(args.seeds)
+    rows = run(args.seeds, base=args.base)
     print(json.dumps(rows, indent=2) if args.json else format_table(rows))
     if not args.json:
         print(f"\n{rows[-1]['packs']} packs, answer-key locator (no API call), {time.perf_counter() - started:.1f} s")

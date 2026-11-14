@@ -19,7 +19,8 @@ class FieldDef:
     kind: FieldKind
     # "ge": at least (quantities, IP codes). "eq": exactly. "ord": at least, in the declared
     # order of ORDINALS for this field's kind (a better Incoterm or arc class is compliant).
-    operator: Literal["ge", "eq", "ord"]
+    # "le": at most (a lead time). "all": every required standard is offered, in the same or a newer edition.
+    operator: Literal["ge", "le", "eq", "ord", "all"]
     label: str
     # (low, high), written like values in a bid. A parse outside it is not believed: the value
     # is dropped and the cell flagged. Ranges are for this equipment class (MV GIS switchgear).
@@ -119,6 +120,106 @@ PARAMETERS: tuple[ParameterDef, ...] = (
 )
 
 PARAMS_BY_ID: dict[str, ParameterDef] = {p.id: p for p in PARAMETERS}
+
+# The delivery, contract-risk and scope-boundary parameters added after the first eight. They are a
+# separate equipment class so that tenders, saved locator answers and fingerprints made under the
+# first eight stay exactly as they were; a manifest opts in with equipment_class "mv_gis_switchgear_ext".
+EXTENDED_PARAMETERS: tuple[ParameterDef, ...] = (
+    ParameterDef(
+        "PARAM-09", "Delivery Lead Time", "Schedule & Delivery", Criticality.HIGH,
+        (FieldDef("lead_time", "lead_time", "le", "Lead time", plausible=("1 weeks", "150 weeks")),),
+        "{lead_time}",
+        "Delivery lead time in weeks and what it is counted from (the purchase order, approved drawings or a "
+        "date). Not the offer validity, the drawing submission time, the FAT date or the warranty period.",
+        # A period counts only beside delivery wording, and never in a warranty or liability sentence.
+        sweep_terms=(r"lead[- ]time",
+                     r"(?!.*(?:warranty|liabilit|defect|guarantee))(?:deliver\w*|manufactur\w+|ex[- ]works)"
+                     r"[^.;]{0,30}\b(?:weeks?|months?|days?)\b"),
+    ),
+    ParameterDef(
+        "PARAM-10", "Delay Liquidated Damages", "Commercial Risk (Liquidated Damages)", Criticality.HIGH,
+        (FieldDef("ld_rate", "percent", "ge", "LD rate", plausible=("0 %", "10 %")),
+         FieldDef("ld_cap", "percent", "ge", "LD cap", plausible=("0 %", "100 %"))),
+        "{ld_rate}; cap {ld_cap}",
+        "Delay liquidated damages: the rate per week or per day of delay as a percentage of the contract price, "
+        "and the maximum cap on them. If the text says liquidated damages are excluded or not accepted, quote that.",
+        sweep_terms=(r"liquidated damages", r"\bLDs?\b", r"delay damages", r"penalt\w+"),
+    ),
+    ParameterDef(
+        "PARAM-11", "Limitation of Liability", "Commercial Risk (Liability)", Criticality.HIGH,
+        (FieldDef("liability_cap", "percent", "ge", "Liability cap", plausible=("1 %", "1000 %")),),
+        "{liability_cap}",
+        "The limit on the supplier's total liability as a percentage of the contract price. Not the defect "
+        "liability period and not liquidated damages.",
+        sweep_terms=(r"liabilit\w+",),
+    ),
+    ParameterDef(
+        "PARAM-12", "Commissioning Spares", "Scope Boundary & Site Interface", Criticality.COMMERCIAL,
+        (FieldDef("spares_included", "scope", "ge", "Commissioning spares"),),
+        "commissioning spares {spares_included}",
+        "Whether commissioning spare parts are included in the price, or quoted separately, optional or excluded.",
+        scope_field="spares_included",
+        sweep_terms=(r"spares?\b", r"spare parts"),
+    ),
+    ParameterDef(
+        "PARAM-13", "Site Supervision", "Scope Boundary & Site Interface", Criticality.COMMERCIAL,
+        (FieldDef("supervision_included", "scope", "ge", "Site supervision"),),
+        "site supervision {supervision_included}",
+        "Whether supervision of erection and commissioning at site is included in the price, or quoted "
+        "separately, optional or excluded.",
+        scope_field="supervision_included",
+        sweep_terms=(r"supervis\w+", r"commissioning engineer"),
+    ),
+    ParameterDef(
+        "PARAM-14", "Rated Altitude", "Thermal & Environmental", Criticality.MANDATORY,
+        (FieldDef("site_altitude", "altitude", "ge", "Altitude", plausible=("0 m", "4500 m")),),
+        "rated for {site_altitude}",
+        "The altitude above sea level the equipment is rated for, or the installation altitude the MR requires, "
+        "in metres or feet.",
+        sweep_terms=(r"altitude", r"elevation", r"above sea level", r"\bmasl\b"),
+    ),
+    ParameterDef(
+        "PARAM-15", "Applicable Standards & Editions", "Standards & Certification", Criticality.HIGH,
+        (FieldDef("standards", "standard", "all", "Standards"),),
+        "{standards}",
+        "The standards (IEC, IEEE, EN, VDE, ISO) the equipment is designed and type-tested to, with the edition "
+        "year where it is written. Not a quality-system certification such as ISO 9001.",
+        # Design and test wording only, so a standards list in a codes section or an ISO 9001 line is not read.
+        sweep_terms=(r"designed\s+(?:and\s+[\w-]+\s+)?(?:to|in accordance with|according to)", r"type[- ]tested",
+                     r"compl(?:y|ies|iant|iance)\s+with"),
+    ),
+)
+
+# One parameter set per equipment class. PARAMETERS and PARAMS_BY_ID above stay as the
+# default class's names; code that holds a manifest asks for its own class instead.
+DEFAULT_EQUIPMENT_CLASS = "mv_gis_switchgear"
+EXTENDED_EQUIPMENT_CLASS = "mv_gis_switchgear_ext"
+PARAMETERS_BY_CLASS: dict[str, tuple[ParameterDef, ...]] = {
+    DEFAULT_EQUIPMENT_CLASS: PARAMETERS,
+    EXTENDED_EQUIPMENT_CLASS: PARAMETERS + EXTENDED_PARAMETERS,
+}
+
+# The classes whose tenders carry a findings register. The first class is frozen as released, so its
+# briefs, fixtures and saved answers keep their shape; the register comes with the extended class.
+FINDINGS_CLASSES = frozenset({EXTENDED_EQUIPMENT_CLASS})
+
+
+
+class UnknownEquipmentClass(ValueError):
+    pass
+
+
+def parameters_for(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> tuple[ParameterDef, ...]:
+    try:
+        return PARAMETERS_BY_CLASS[equipment_class]
+    except KeyError:
+        known = ", ".join(sorted(PARAMETERS_BY_CLASS))
+        raise UnknownEquipmentClass(
+            f"no parameters defined for equipment class {equipment_class!r} (known: {known})") from None
+
+
+def params_by_id_for(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> dict[str, ParameterDef]:
+    return {p.id: p for p in parameters_for(equipment_class)}
 
 # Declared orders for classed values, weakest first, from the buyer's side. A field with
 # operator "ord" passes when the offered value is at or above the required one in its order.

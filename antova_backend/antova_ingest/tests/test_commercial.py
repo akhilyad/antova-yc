@@ -310,3 +310,62 @@ def test_ranges_reach_the_cost_lines_from_a_table_that_declares_them():
     raw["deviation_rates"]["PARAM-03.iac_not_aflr"][0].update({"low": "3500.00", "high": "6500.00"})
     line = parse_rate_table(raw).deviation_rates["PARAM-03.iac_not_aflr"][0]
     assert isinstance(line, RateLine) and (line.low, line.high) == (Decimal("3500.00"), Decimal("6500.00"))
+
+
+# --- the evaluated price: headline plus priced gaps ---------------------------------------------------
+
+from antova_ingest.pipeline import EVALUATED_OUTLIER_SHARE, _outlying_evaluated  # noqa: E402
+
+
+def _fin(vendor_id, evaluated, status="PRICED"):
+    return {"vendor_id": vendor_id, "true_evaluated_price": evaluated, "price_status": status}
+
+
+def test_an_evaluated_price_far_from_the_others_is_warned_about_when_its_headline_was_not():
+    headlines = {"a": 452000.0, "b": 418000.0, "c": 439000.0}
+    financials = [_fin("a", 452000.0), _fin("b", 603070.0, "UNPRICED_ITEMS"), _fin("c", 454000.0)]
+    (message,) = _outlying_evaluated(financials, headlines)
+    assert message == ("b: evaluated price at least EUR 603,070.00 (headline plus priced gaps) is 33% above the "
+                       "median of the other bids' evaluated prices (EUR 453,000.00); its priced gaps drive the difference")
+
+
+def test_the_evaluated_rule_is_tighter_than_the_headline_rule_and_stops_at_its_share():
+    headlines = {"a": 452000.0, "b": 418000.0, "c": 439000.0}
+    assert EVALUATED_OUTLIER_SHARE == 0.25
+    in_line = [_fin("a", 452000.0), _fin("b", 566000.0), _fin("c", 454000.0)]   # +24.9%
+    assert _outlying_evaluated(in_line, headlines) == []
+    below = [_fin("a", 452000.0), _fin("b", 330000.0), _fin("c", 454000.0)]     # -27%
+    assert "27% below" in _outlying_evaluated(below, headlines)[0]
+    assert "at least" not in _outlying_evaluated(below, headlines)[0]  # fully priced: not a lower bound
+
+
+def test_a_bid_whose_headline_was_already_flagged_is_not_warned_twice():
+    headlines = {"a": 452000.0, "b": 38000.0, "c": 439000.0}  # b's headline is a per-bay figure
+    financials = [_fin("a", 452000.0), _fin("b", 99650.0), _fin("c", 454000.0)]
+    assert _outlying_evaluated(financials, headlines) == []
+
+
+def test_an_unknown_evaluated_price_takes_no_part():
+    headlines = {"a": 452000.0, "b": None, "c": 439000.0}
+    financials = [_fin("a", 452000.0), _fin("b", None, "NO_HEADLINE"), _fin("c", 454000.0)]
+    assert _outlying_evaluated(financials, headlines) == []
+
+
+def test_the_headline_messages_are_unchanged_by_the_shared_rule():
+    assert _implausible_headlines({"a": 452000.0, "b": 439000.0, "c": 890000.0}) == [
+        "c: headline price EUR 890,000.00 is far from the median of the other bids (EUR 445,500.00); "
+        "check the cited passage"]
+
+
+@pytest.mark.parametrize("base", ["TENDER-2026-402", "TENDER-2026-418"])
+def test_a_low_headline_whose_priced_gaps_make_it_the_outlier_is_warned_about(base, tmp_path):
+    from samples import mutate
+    from antova_ingest.verify import compare_to_answer_key
+
+    target = mutate.generate(["costly_gap"], tmp_path, base=base)
+    key = json.loads((target / "expected.json").read_text(encoding="utf-8"))
+    result = run_ingest(target, locator=AnswerKeyLocator(key))
+    assert compare_to_answer_key(result.tender, key, result) == []
+    assert not any(w.startswith("vendor-b: headline price") for w in result.warnings)
+    assert [w.split(" (")[0] for w in result.warnings if "evaluated price" in w] == [
+        f"vendor-b: evaluated price at least EUR {float(key['vendors']['vendor-b']['true_evaluated_price']):,.2f}"]

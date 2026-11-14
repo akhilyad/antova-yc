@@ -33,6 +33,7 @@ MESSAGES = {
     "needs_inspection": "Evidence needs inspection",
     "missing_price": "Bid price not found; fix the source and re-ingest",
     "review_flag": "Review flag not approved yet",
+    "project_field": "Buyer-entered project value not confirmed yet",
 }
 _REVIEW_MESSAGES = {
     "open": "Review flag not approved yet",
@@ -43,7 +44,7 @@ _REVIEW_MESSAGES = {
 
 @dataclass
 class OpenItem:
-    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag"]
+    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag", "project_field"]
     vendor_id: str
     param_id: Optional[str]
     message: str
@@ -51,6 +52,30 @@ class OpenItem:
 
 def _item(kind: str, vendor_id: str, param_id: Optional[str] = None) -> OpenItem:
     return OpenItem(kind=kind, vendor_id=vendor_id, param_id=param_id, message=MESSAGES[kind])
+
+
+# A buyer-entered project value is reviewed through the same record as a cell, under this key:
+# param_id "PROJECT.<field>", vendor_id "-".
+PROJECT_PREFIX = "PROJECT."
+PROJECT_VENDOR = "-"
+
+
+def project_review_key(field_name: str) -> tuple[str, str]:
+    return (PROJECT_PREFIX + field_name, PROJECT_VENDOR)
+
+
+def project_field_hash(value: Mapping[str, Any]) -> str:
+    """SHA-256 of a project value as the reviewer saw it; a changed value makes the confirmation stale."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def project_field_state(value: Mapping[str, Any], review: Optional[Mapping[str, Any]]) -> str:
+    """open, reviewed, stale or rejected. A buyer-entered value always needs a person's confirmation."""
+    if review is None:
+        return "open"
+    if review["evidence_hash"] != project_field_hash(value):
+        return "stale"
+    return "rejected" if review["action"] == "reject" else "reviewed"
 
 
 def evidence_hash(cell) -> str:
@@ -114,6 +139,11 @@ def open_items(tender: TenderPackage, overrides: Mapping[tuple[str, str], Overri
     """
     reviews = reviews or {}
     items = []
+    for name, value in (tender.project or {}).items():
+        state = project_field_state(value, reviews.get(project_review_key(name)))
+        if state in _REVIEW_MESSAGES:
+            items.append(OpenItem(kind="project_field", vendor_id=PROJECT_VENDOR, param_id=PROJECT_PREFIX + name,
+                                  message=_REVIEW_MESSAGES[state].replace("Review flag", "Buyer-entered value")))
     for v in tender.vendors:
         if not v.headline_price:
             items.append(_item("missing_price", v.id))
@@ -127,7 +157,9 @@ def open_items(tender: TenderPackage, overrides: Mapping[tuple[str, str], Overri
                                       message=_REVIEW_MESSAGES[state]))
             if (p.id, v.id) in overrides:
                 continue
-            if cell.pricing_status == "UNPRICED":
+            # An exposure gap waits on the review flag above (a person accepts it), not on an adder.
+            exposure_gap = any(f.get("code") == "EXPOSURE_GAP" for f in cell.flags)
+            if cell.pricing_status == "UNPRICED" and not exposure_gap:
                 items.append(_item("unpriced", v.id, p.id))
             if cell.status == ComplianceStatus.MANUAL_INSPECTION_REQUIRED:
                 items.append(_item("needs_inspection", v.id, p.id))
@@ -153,6 +185,10 @@ def brief_payload(
     """The JSON body the public brief page and the founder review page both render."""
     reviews = reviews or {}
     items = open_items(tender, overrides, reviews)
+    tender_json = tender.model_dump(mode="json")
+    for optional in ("project", "findings"):
+        if tender_json.get(optional) is None:
+            del tender_json[optional]  # absent: the payload is what it was before the field existed
     return {
         "share_id": meta.share_id,
         "status": meta.status,
@@ -162,7 +198,7 @@ def brief_payload(
         "ingest_stats": meta.ingest_stats,
         "stage_log": meta.stage_log,
         "documents": documents,
-        "tender": tender.model_dump(mode="json"),
+        "tender": tender_json,
         "financials": evaluate_vendor_financials(tender, sensitivity, [], overrides=overrides),
         "overrides": _override_entries(overrides),
         "open_items": [asdict(item) for item in items],

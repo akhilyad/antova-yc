@@ -20,7 +20,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 
 from antova_engine import ComplianceStatus, CostLine
-from antova_ingest.ontology import FieldDef, ParameterDef
+from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, FieldDef, ParameterDef
 from antova_ingest.parse import RATE_TABLE_PATTERN, RATES_DIR
 from antova_ingest.types import FieldValue, Resolution
 
@@ -42,6 +42,14 @@ _CLASS_SUFFIX = {
     ("PARAM-06", "warranty_months"): "warranty_short",
     ("PARAM-07", "rated_voltage"): "voltage_short",
     ("PARAM-08", "max_ambient"): "ambient_short",
+    ("PARAM-09", "lead_time"): "lead_time_long",
+    ("PARAM-10", "ld_rate"): "ld_rate_short",
+    ("PARAM-10", "ld_cap"): "ld_cap_short",
+    ("PARAM-11", "liability_cap"): "liability_cap_short",
+    ("PARAM-12", "spares_included"): "spares_missing",
+    ("PARAM-13", "supervision_included"): "supervision_missing",
+    ("PARAM-14", "site_altitude"): "altitude_short",
+    ("PARAM-15", "standards"): "standard_not_met",
 }
 # PARAM-01 is priced as one upgrade: a rating upgrade also covers the duration.
 _PARAM_01_CLASSES = {"ik": "ik_rating_short", "ik_duration": "ik_duration_short"}
@@ -82,6 +90,11 @@ class RateTable:
     unpriced_classes: frozenset[str] = frozenset()
     # Other currencies into the table's own: {"USD": {"rate": Decimal, "date": "2026-11-03"}}.
     fx_rates: dict[str, dict] = field(default_factory=dict)
+    # The parameter set this table prices. Tables written before the field existed price the first class.
+    equipment_class: str = DEFAULT_EQUIPMENT_CLASS
+    # Unpriced classes whose gap is money at risk (an exposure, antova_ingest.exposure), not a price. The review
+    # gate asks a person to accept such a gap instead of asking for an adder.
+    exposure_classes: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -159,8 +172,13 @@ def parse_rate_table(data: dict) -> RateTable:
         if rate == 0:
             raise ConfigError(f"{what}: rate must be greater than zero")
         fx[currency.upper()] = {"rate": rate, "date": str(entry["date"])}
+    exposures = frozenset(data.get("exposure_classes", []))
+    stray = sorted(exposures - unpriced)
+    if stray:
+        raise ConfigError(f"{name}: exposure class {', '.join(stray)} must also be listed under unpriced_classes")
     return RateTable(str(data["version"]), str(data["effective_date"]), str(data["currency"]).upper(), rates,
-                     policies, base_labour, unpriced, fx)
+                     policies, base_labour, unpriced, fx, str(data.get("equipment_class", DEFAULT_EQUIPMENT_CLASS)),
+                     exposures)
 
 
 def load_rate_table(name: str) -> RateTable:

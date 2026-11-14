@@ -29,7 +29,9 @@ from antova_models import (
 )
 from antova_export import XLSX_TYPE, clarifications_xlsx, tbe_workbook
 from antova_ingest import clarify
-from antova_review import evidence_hash, open_items, review_state
+from antova_review import (
+    PROJECT_PREFIX, PROJECT_VENDOR, evidence_hash, open_items, project_field_hash, project_field_state, review_state,
+)
 
 _CENTS = Decimal("0.01")
 REVIEW_CACHE = "private, no-store"
@@ -158,6 +160,16 @@ def put_review(tender_id: str, param_id: str, vendor_id: str, body: ReviewBody,
 
     The extracted data is never changed. To change a cell's adder, use the overrides route.
     """
+    if param_id.startswith(PROJECT_PREFIX):
+        value = (loaded.tender.project or {}).get(param_id[len(PROJECT_PREFIX):])
+        if value is None or vendor_id != PROJECT_VENDOR:
+            raise not_found()
+        row = TenderRepository(db).add_review(tender_id, param_id, vendor_id, action=body.action,
+                                              reviewer=principal.id, note=body.note,
+                                              evidence_hash=project_field_hash(value))
+        log.info("project value reviewed: tender=%s field=%s action=%s by=%s", tender_id, param_id,
+                 body.action, principal.id)
+        return {**row, "created_at": row["created_at"].isoformat(), "state": project_field_state(value, row)}
     cell = next((p.vendors[vendor_id] for p in loaded.tender.parameters
                  if p.id == param_id and vendor_id in p.vendors), None)
     if cell is None:
