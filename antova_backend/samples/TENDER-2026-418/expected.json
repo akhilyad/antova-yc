@@ -135,6 +135,15 @@
       "values": {
         "site_altitude": "1000 m"
       }
+    },
+    "PARAM-15": {
+      "page": 5,
+      "quotes": [
+        "The switchgear shall be designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017."
+      ],
+      "values": {
+        "standards": "IEC 62271-1:2017, IEC 62271-200:2021"
+      }
     }
   },
   "cells": {
@@ -281,6 +290,16 @@
         "quote": "Rated for installation at altitude up to 1000 m above sea level.",
         "values": {
           "site_altitude": "1000 m"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-15": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017.",
+        "values": {
+          "standards": "IEC 62271-1:2017, IEC 62271-200:2021"
         },
         "secondary_page": null,
         "adder": "0.00"
@@ -440,6 +459,17 @@
         "secondary_page": null,
         "adder": "0.00",
         "pricing_status": "UNPRICED"
+      },
+      "PARAM-15": {
+        "status": "DEVIATION_DOWNGRADE",
+        "page": 6,
+        "quote": "Designed and type-tested to IEC 62271-200:2011 and IEC 62271-1:2017.",
+        "values": {
+          "standards": "IEC 62271-1:2017, IEC 62271-200:2011"
+        },
+        "secondary_page": null,
+        "adder": "0.00",
+        "pricing_status": "UNPRICED"
       }
     },
     "vendor-c": {
@@ -587,6 +617,17 @@
         "values": {},
         "secondary_page": null,
         "adder": "0.00"
+      },
+      "PARAM-15": {
+        "status": "DEVIATION_DOWNGRADE",
+        "page": 6,
+        "quote": "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1.",
+        "values": {
+          "standards": "IEC 62271-1, IEC 62271-200:2021"
+        },
+        "secondary_page": null,
+        "adder": "0.00",
+        "pricing_status": "UNPRICED"
       }
     }
   },
@@ -666,6 +707,11 @@
           "param_id": "PARAM-06",
           "page": 14,
           "quote": "The defect liability period shall be 36 months from commissioning."
+        },
+        {
+          "param_id": "PARAM-15",
+          "page": 5,
+          "quote": "The switchgear shall be designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017."
         },
         {
           "param_id": "PARAM-14",
@@ -755,6 +801,11 @@
           "param_id": "PARAM-06",
           "page": 21,
           "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        },
+        {
+          "param_id": "PARAM-15",
+          "page": 6,
+          "quote": "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017."
         },
         {
           "param_id": "PARAM-14",
@@ -856,6 +907,11 @@
           "quote": "Prices are quoted Ex-Works (EXW) Izmir factory loading dock; standard warranty 18 months from dispatch."
         },
         {
+          "param_id": "PARAM-15",
+          "page": 6,
+          "quote": "Designed and type-tested to IEC 62271-200:2011 and IEC 62271-1:2017."
+        },
+        {
           "param_id": "PARAM-14",
           "page": 7,
           "quote": "Rated for installation at altitude up to 800 m above sea level."
@@ -948,6 +1004,11 @@
           "param_id": "PARAM-06",
           "page": 21,
           "quote": "Delivered At Place (DAP) project site; warranty 24 months from commissioning."
+        },
+        {
+          "param_id": "PARAM-15",
+          "page": 6,
+          "quote": "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1."
         },
         {
           "param_id": "PARAM-09",

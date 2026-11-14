@@ -16,11 +16,12 @@ EXT = ontology.EXTENDED_EQUIPMENT_CLASS
 BASE = ontology.DEFAULT_EQUIPMENT_CLASS
 
 
-def test_the_extended_class_is_the_first_eight_plus_six():
+def test_the_extended_class_is_the_first_eight_plus_seven():
     base, ext = ontology.parameters_for(BASE), ontology.parameters_for(EXT)
     assert [p.id for p in base] == [f"PARAM-0{i}" for i in range(1, 9)]
     assert ext[:8] == base
-    assert [p.id for p in ext[8:]] == ["PARAM-09", "PARAM-10", "PARAM-11", "PARAM-12", "PARAM-13", "PARAM-14"]
+    assert [p.id for p in ext[8:]] == ["PARAM-09", "PARAM-10", "PARAM-11", "PARAM-12", "PARAM-13", "PARAM-14",
+                                       "PARAM-15"]
 
 
 def test_every_new_field_has_a_parser_a_sweep_signal_and_a_deviation_class():
@@ -128,3 +129,27 @@ def test_scope(quote, name, expected):
 
 def test_an_unknown_scope_field_reads_nothing():
     assert scope("Everything is included.", "anything_else") is None
+
+
+def test_the_standards_sweep_reads_design_and_test_wording_only():
+    from antova_ingest import sweep
+
+    standards = ontology.params_by_id_for(EXT)["PARAM-15"]
+    assert sweep.names_parameter(standards, "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017.")
+    assert sweep.names_parameter(standards, "The switchgear complies with IEC 62271-200.")
+    assert not sweep.names_parameter(standards, "IEC 62271-200: Metal-enclosed switchgear and controlgear.")
+    assert not sweep.names_parameter(standards, "The supplier operates a quality system certified to ISO 9001.")
+    assert not sweep.names_parameter(standards, "Our offer is 100% compliant with MR-33kV-GIS-Rev4.")
+
+
+@pytest.mark.parametrize("quote, expected", [
+    ("Designed to IEC 62271-200:2021, except clause 6.2.", True),
+    ("Partially compliant with IEC 61850.", True),
+    ("Compliance with IEC 62271-200 is optional.", True),
+    ("Designed to IEC 62271-200:2021.", False),
+    ("Delivery is excluded.", False),  # an exception, but no standard named
+])
+def test_a_standard_exception_is_recognised(quote, expected):
+    from antova_ingest.values import standard_exception
+
+    assert standard_exception(quote) is expected

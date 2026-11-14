@@ -23,7 +23,7 @@ from samples import mutate
 SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 TENDER_ID = "TENDER-2026-418"
 PACK = SAMPLES / TENDER_ID
-NEW = ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-12", "PARAM-13", "PARAM-14")
+NEW = ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-12", "PARAM-13", "PARAM-14", "PARAM-15")
 Status = engine.ComplianceStatus
 
 
@@ -70,6 +70,9 @@ def test_the_first_eight_parameters_price_exactly_as_in_tender_402(result):
     ("vendor-b", "PARAM-12", Status.OMITTED, "commissioning spares not included"),
     ("vendor-b", "PARAM-13", Status.OMITTED, "site supervision not included"),
     ("vendor-b", "PARAM-14", Status.DEVIATION_DOWNGRADE, "rated for 800 m"),
+    ("vendor-a", "PARAM-15", Status.COMPLIANT, "IEC 62271-1:2017, IEC 62271-200:2021"),
+    ("vendor-b", "PARAM-15", Status.DEVIATION_DOWNGRADE, "IEC 62271-1:2017, IEC 62271-200:2011"),
+    ("vendor-c", "PARAM-15", Status.DEVIATION_DOWNGRADE, "IEC 62271-1, IEC 62271-200:2021"),
 ])
 def test_what_each_bid_does_on_the_new_parameters(result, vendor, param, status, values):
     cell = _cells(result.tender)[(vendor, param)]
@@ -86,8 +89,8 @@ def test_a_deviation_in_a_class_the_table_has_no_rate_for_is_unpriced_not_free(r
     cells = _cells(result.tender)
     unpriced = {key for key, cell in cells.items() if cell.pricing_status == "UNPRICED" and key[1] in NEW}
     # Spares and supervision are priced when a bid excludes them; the rest are exposures or unrated.
-    assert unpriced == {("vendor-b", p) for p in ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14")} | {
-        ("vendor-c", "PARAM-10")}
+    assert unpriced == {("vendor-b", p) for p in ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14", "PARAM-15")} | {
+        ("vendor-c", "PARAM-10"), ("vendor-c", "PARAM-15")}
     assert all(cells[key].cost_adder == 0.0 for key in unpriced)
 
 
@@ -146,6 +149,9 @@ def test_extended_operators_do_not_apply_to_the_first_pack(name, tmp_path):
     ("altitude_in_feet", "vendor-a", "PARAM-14", Status.COMPLIANT),
     ("spares_silent", "vendor-a", "PARAM-12", Status.MANUAL_INSPECTION_REQUIRED),
     ("supervision_optional", "vendor-c", "PARAM-13", Status.OMITTED),
+    ("standard_newer_edition", "vendor-a", "PARAM-15", Status.COMPLIANT),
+    ("standard_edition_dropped", "vendor-b", "PARAM-15", Status.DEVIATION_DOWNGRADE),
+    ("standard_exception", "vendor-a", "PARAM-15", Status.MANUAL_INSPECTION_REQUIRED),
 ])
 def test_what_each_operator_does_to_its_cell(name, vendor, param, status, tmp_path):
     result, _ = _ingest([name], tmp_path)
@@ -176,3 +182,27 @@ def test_eval_reports_the_extended_pack_separately(tmp_path):
     total = rows[-1]
     assert (total["mismatches"], total["rejected"]) == (0, 0)
     assert (total["status"], total["pricing"], total["recall"]) == ("100.0%", "100.0%", "100.0%")
+
+
+# --- the standards check ---------------------------------------------------------------------------
+
+def test_the_standards_rule_reads_as_a_sentence(result):
+    param = next(p for p in result.tender.parameters if p.id == "PARAM-15")
+    assert param.pint_rule == "Standards include IEC 62271-1:2017, IEC 62271-200:2021"
+
+
+def test_an_older_or_unstated_edition_is_asked_about(result):
+    rows = {(r["vendor_id"], r["kind"]): r["question"] for r in clarify.clarifications(result.tender)
+            if r["param_id"] == "PARAM-15"}
+    assert "IEC 62271-200:2011" in rows[("vendor-b", "DEVIATION")]
+    assert "IEC 62271-1, IEC 62271-200:2021" in rows[("vendor-c", "DEVIATION")]
+    assert "type-test certificates" in rows[("vendor-b", "DEVIATION")]
+
+
+def test_a_stated_exception_is_flagged_and_asked_about_not_left_silent(tmp_path):
+    result, _ = _ingest(["standard_exception"], tmp_path)
+    cell = _cells(result.tender)[("vendor-a", "PARAM-15")]
+    assert [f["code"] for f in cell.flags] == ["STANDARD_EXCEPTION"]
+    questions = [r["question"] for r in clarify.clarifications(result.tender)
+                 if r["vendor_id"] == "vendor-a" and r["param_id"] == "PARAM-15"]
+    assert any("List each clause you deviate from" in q for q in questions)

@@ -69,7 +69,7 @@ def check_invariants(result):
 
 
 def test_the_sample_register_holds_every_invariant(base):
-    assert len(base.tender.findings) == 21
+    assert len(base.tender.findings) == 23  # 21, plus the two standards deviations
     check_invariants(base)
 
 

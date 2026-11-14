@@ -217,7 +217,7 @@ def test_rule_text_names_the_new_operators():
         FieldDef("lead", "lead_time", "le", "Lead"), FieldDef("std", "standard", "all", "Std")), "", "")
     text = rule_text(param, {"lead": read("lead_time", "Delivery 40 weeks."),
                              "std": read("standard", "IEC 61850.")})
-    assert text == "Lead ≤ 40 weeks AND Std complies with IEC 61850"
+    assert text == "Lead ≤ 40 weeks AND Std include IEC 61850"
 
 
 # --- the value is found in the cited text, and survives storage ------------------------------------

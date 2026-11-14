@@ -49,6 +49,7 @@ _CLASS_SUFFIX = {
     ("PARAM-12", "spares_included"): "spares_missing",
     ("PARAM-13", "supervision_included"): "supervision_missing",
     ("PARAM-14", "site_altitude"): "altitude_short",
+    ("PARAM-15", "standards"): "standard_not_met",
 }
 # PARAM-01 is priced as one upgrade: a rating upgrade also covers the duration.
 _PARAM_01_CLASSES = {"ik": "ik_rating_short", "ik_duration": "ik_duration_short"}

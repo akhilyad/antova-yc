@@ -1,6 +1,6 @@
 """Content of the synthetic TENDER-2026-418 pack, written as data.
 
-The extended-class sample: the TENDER-2026-402 scenario with PARAM-09..14 added (delivery lead
+The extended-class sample: the TENDER-2026-402 scenario with PARAM-09..15 added (delivery lead
 time, delay liquidated damages, liability cap, commissioning spares, site supervision, rated
 altitude). It is evaluated under equipment class mv_gis_switchgear_ext.
 
@@ -55,6 +55,7 @@ FILLER_418["spares"] = [
 # --- Evidence -----------------------------------------------------------------
 
 MR_EVIDENCE = copy.deepcopy(scenario.MR_EVIDENCE) + [
+    Ev("mr.p15", 5, "The switchgear shall be designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017.", "PARAM-15"),
     Ev("mr.p14", 7, "Equipment shall be rated for installation at an altitude of up to 1000 m above sea level.", "PARAM-14"),
     Ev("mr.p13", 12, "Supervision of erection and commissioning at site shall be included in the contract price.", "PARAM-13"),
     Ev("mr.p09", 14, "Delivery shall be completed within 40 weeks from the purchase order.", "PARAM-09"),
@@ -65,6 +66,7 @@ MR_EVIDENCE = copy.deepcopy(scenario.MR_EVIDENCE) + [
 
 _NEW_VENDOR_EVIDENCE = {
     "vendor-a": [
+        Ev("a.p15", 6, "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1:2017.", "PARAM-15"),
         Ev("a.p14", 7, "Rated for installation at altitude up to 1000 m above sea level.", "PARAM-14"),
         Ev("a.p09", 21, "Delivery 36 weeks from purchase order.", "PARAM-09"),
         Ev("a.p10", 21, "Delay liquidated damages are accepted at 0.5% per week of the contract price, capped at 10% of the contract price.", "PARAM-10"),
@@ -73,6 +75,7 @@ _NEW_VENDOR_EVIDENCE = {
         Ev("a.p12", 26, "Two years of commissioning spares are included in the price.", "PARAM-12"),
     ],
     "vendor-b": [
+        Ev("b.p15", 6, "Designed and type-tested to IEC 62271-200:2011 and IEC 62271-1:2017.", "PARAM-15"),
         Ev("b.p14", 7, "Rated for installation at altitude up to 800 m above sea level.", "PARAM-14"),
         Ev("b.p09", 21, "Delivery 44 weeks from purchase order.", "PARAM-09"),
         Ev("b.p10", 21, "Liquidated damages for delay are excluded.", "PARAM-10"),
@@ -81,6 +84,7 @@ _NEW_VENDOR_EVIDENCE = {
         Ev("b.p12", 26, "Commissioning spares are quoted separately.", "PARAM-12"),
     ],
     "vendor-c": [
+        Ev("c.p15", 6, "Designed and type-tested to IEC 62271-200:2021 and IEC 62271-1.", "PARAM-15"),
         Ev("c.p09", 21, "Delivery 38 weeks from purchase order.", "PARAM-09"),
         Ev("c.p10", 21, "Delay liquidated damages of 0.5% per week, capped at 5% of the contract price.", "PARAM-10"),
         Ev("c.p11", 21, "Total liability is limited to 100% of the contract price.", "PARAM-11"),
@@ -107,6 +111,7 @@ REQUIREMENTS = {
     "PARAM-12": (["mr.p12"], {"spares_included": "included"}),
     "PARAM-13": (["mr.p13"], {"supervision_included": "included"}),
     "PARAM-14": (["mr.p14"], {"site_altitude": "1000 m"}),
+    "PARAM-15": (["mr.p15"], {"standards": "IEC 62271-1:2017, IEC 62271-200:2021"}),
 }
 
 _MANUAL = ("MANUAL_INSPECTION_REQUIRED", None, {}, None, "0.00")
@@ -118,6 +123,7 @@ CELLS["vendor-a"].update({
     "PARAM-12": ("COMPLIANT", "a.p12", {"spares_included": "included"}, None, "0.00"),
     "PARAM-13": ("COMPLIANT", "a.p13", {"supervision_included": "included"}, None, "0.00"),
     "PARAM-14": ("COMPLIANT", "a.p14", {"site_altitude": "1000 m"}, None, "0.00"),
+    "PARAM-15": ("COMPLIANT", "a.p15", {"standards": "IEC 62271-1:2017, IEC 62271-200:2021"}, None, "0.00"),
 })
 CELLS["vendor-b"].update({
     "PARAM-09": ("DEVIATION_DOWNGRADE", "b.p09", {"lead_time": "44 weeks"}, None, "0.00"),
@@ -126,6 +132,8 @@ CELLS["vendor-b"].update({
     "PARAM-12": ("OMITTED", "b.p12", {"spares_included": "not included"}, None, "14000.00"),
     "PARAM-13": ("OMITTED", "b.p13", {"supervision_included": "not included"}, None, "9600.00"),
     "PARAM-14": ("DEVIATION_DOWNGRADE", "b.p14", {"site_altitude": "800 m"}, None, "0.00"),
+    # An older edition of IEC 62271-200 than the MR names.
+    "PARAM-15": ("DEVIATION_DOWNGRADE", "b.p15", {"standards": "IEC 62271-1:2017, IEC 62271-200:2011"}, None, "0.00"),
 })
 CELLS["vendor-c"].update({
     "PARAM-09": ("COMPLIANT", "c.p09", {"lead_time": "38 weeks"}, None, "0.00"),
@@ -134,6 +142,8 @@ CELLS["vendor-c"].update({
     "PARAM-12": ("COMPLIANT", "c.p12", {"spares_included": "included"}, None, "0.00"),
     "PARAM-13": ("COMPLIANT", "c.p13", {"supervision_included": "included"}, None, "0.00"),
     "PARAM-14": _MANUAL,
+    # IEC 62271-1 with no edition: compliance with the 2017 edition cannot be shown.
+    "PARAM-15": ("DEVIATION_DOWNGRADE", "c.p15", {"standards": "IEC 62271-1, IEC 62271-200:2021"}, None, "0.00"),
 })
 
 # Table ext_v1 prices a bid that excludes commissioning spares (14,000.00, one lot) or site supervision
@@ -143,8 +153,8 @@ VENDOR_TOTALS = {**scenario.VENDOR_TOTALS, "vendor-b": ("85250.00", "503250.00")
 NEGOTIATING_VENDOR = scenario.NEGOTIATING_VENDOR
 CLAWBACK = dict(scenario.CLAWBACK)
 CELL_EXTRAS = copy.deepcopy(scenario.CELL_EXTRAS)
-for _vendor, _params in (("vendor-b", ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14")),
-                         ("vendor-c", ("PARAM-10",))):
+for _vendor, _params in (("vendor-b", ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14", "PARAM-15")),
+                         ("vendor-c", ("PARAM-10", "PARAM-15"))):
     for _param in _params:
         CELL_EXTRAS[(_vendor, _param)] = {"pricing_status": "UNPRICED"}
 VENDOR_PRICE_STATUS = {"vendor-b": "UNPRICED_ITEMS", "vendor-c": "UNPRICED_ITEMS"}

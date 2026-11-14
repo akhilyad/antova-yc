@@ -656,6 +656,14 @@ def _parse_standard(quote: str) -> FieldValue | None:
     return FieldValue("standard", items, ", ".join(items))
 
 
+def standard_exception(quote: str) -> bool:
+    """True when a sentence cites a standard and also states an exception, deviation or partial compliance."""
+    for sentence in split_sentences(_normalize_text(quote).replace("‑", "-")):
+        if _STANDARD.search(sentence) and (_STANDARD_NEGATED.search(sentence) or _has_carve_out(sentence)):
+            return True
+    return False
+
+
 def _split_standard(item: str) -> tuple[str, str | None]:
     base, _, year = item.partition(":")
     return base, year or None
@@ -970,7 +978,7 @@ def rule_text(param: ParameterDef, requirement: dict[str, FieldValue]) -> str:
             if f.kind == "scope":
                 parts.append(f"{f.label} {requirement[f.name].display}")
                 continue
-            symbol = {"eq": "=", "le": "≤", "all": "complies with"}.get(f.operator, "≥")
+            symbol = {"eq": "=", "le": "≤", "all": "include"}.get(f.operator, "≥")
             parts.append(f"{f.label} {symbol} {requirement[f.name].display}")
     return " AND ".join(parts)
 

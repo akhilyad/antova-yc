@@ -178,6 +178,16 @@ EXTENDED_PARAMETERS: tuple[ParameterDef, ...] = (
         "in metres or feet.",
         sweep_terms=(r"altitude", r"elevation", r"above sea level", r"\bmasl\b"),
     ),
+    ParameterDef(
+        "PARAM-15", "Applicable Standards & Editions", "Standards & Certification", Criticality.HIGH,
+        (FieldDef("standards", "standard", "all", "Standards"),),
+        "{standards}",
+        "The standards (IEC, IEEE, EN, VDE, ISO) the equipment is designed and type-tested to, with the edition "
+        "year where it is written. Not a quality-system certification such as ISO 9001.",
+        # Design and test wording only, so a standards list in a codes section or an ISO 9001 line is not read.
+        sweep_terms=(r"designed\s+(?:and\s+[\w-]+\s+)?(?:to|in accordance with|according to)", r"type[- ]tested",
+                     r"compl(?:y|ies|iant|iance)\s+with"),
+    ),
 )
 
 # One parameter set per equipment class. PARAMETERS and PARAMS_BY_ID above stay as the

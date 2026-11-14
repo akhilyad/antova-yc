@@ -531,6 +531,30 @@ def spares_silent(pack: Pack, rng: random.Random) -> None:
 
 
 @extended_operator
+def standard_newer_edition(pack: Pack, rng: random.Random) -> None:
+    """vendor-a cites the 2024 edition of IEC 62271-200. A newer edition meets the 2021 the MR names."""
+    _extended_edit(pack, "vendor-a", "PARAM-15", "IEC 62271-200:2021", "IEC 62271-200:2024",
+                   values={"standards": "IEC 62271-1:2017, IEC 62271-200:2024"})
+
+
+@extended_operator
+def standard_edition_dropped(pack: Pack, rng: random.Random) -> None:
+    """vendor-b drops the edition year. Still a deviation: an unstated edition cannot be shown to be the 2021 one."""
+    _extended_edit(pack, "vendor-b", "PARAM-15", "IEC 62271-200:2011", "IEC 62271-200",
+                   values={"standards": "IEC 62271-1:2017, IEC 62271-200"})
+
+
+@extended_operator
+def standard_exception(pack: Pack, rng: random.Random) -> None:
+    """vendor-a adds an exception to its standards sentence. Nothing is read as compliance: the cell needs
+    inspection, and a flag says the bid stated an exception."""
+    _need_extended(pack, "vendor-a", "PARAM-15")
+    pack.replace_text(pack.file_of("vendor-a"), "IEC 62271-1:2017.", "IEC 62271-1:2017, except clause 6.2.")
+    _blank_cells(pack, "vendor-a", ["PARAM-15"])
+    pack.expect_flag("vendor-a", "PARAM-15", "states an exception")
+
+
+@extended_operator
 def supervision_optional(pack: Pack, rng: random.Random) -> None:
     """vendor-c makes site supervision optional: left out of the price, so the table prices it (9,600.00)."""
     _extended_edit(pack, "vendor-c", "PARAM-13", "is included in the price.", "is optional and priced on request.",

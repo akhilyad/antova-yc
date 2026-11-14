@@ -60,6 +60,9 @@ FIELD_TEMPLATES: dict[str, tuple[str, str, str]] = {
                              "or state the price to include it."),
     "site_altitude": ("a rated altitude of {offered}", "{required}",
                       "Confirm the altitude rating and any derating that applies."),
+    "standards": ("design and type tests to {offered}", "{required}",
+                  "Confirm every standard and edition the equipment is designed and type-tested to, and provide the "
+                  "type-test certificates for the editions the MR requires."),
 }
 _GENERIC = ("{label} {offered}", "{required}", "Confirm the offered value and the page where it is documented.")
 _PAGE = re.compile(r"\bp\.(\d+(?:-\d+)?)")
@@ -93,6 +96,9 @@ def _flag_question(flag: dict, param_name: str) -> str | None:
     if code in ("AMBIGUOUS_NUMBER", "IMPLAUSIBLE_VALUE", "VALUE_NOT_IN_SPAN"):
         return (f"A value on {at} could not be read reliably. "
                 f"Restate {param_name} with its unit, writing the decimal mark unambiguously.")
+    if code == "STANDARD_EXCEPTION":
+        return (f"Your bid states an exception to a standard on {at}. List each clause you deviate from, "
+                f"with the standard and edition it belongs to.")
     if code == "NO_TEXT_LAYER":
         return f"Part of your bid ({at}) is a scanned image and could not be read. Resubmit it as a text PDF."
     return None  # NOT_STATED / LOCATOR_SILENT: the manual-inspection row asks for the value

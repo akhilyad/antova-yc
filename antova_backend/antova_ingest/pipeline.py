@@ -44,7 +44,7 @@ from antova_ingest.types import (
 )
 from antova_ingest.values import (
     detect_locale, normalize_numbers, parse_bay_count, parse_commissioning_lag, parse_field, read_price, plausible, rule_text,
-    value_in_span,
+    standard_exception, value_in_span,
 )
 
 STAGES = [
@@ -431,6 +431,11 @@ def read_values(param_id: str, citation: Citation, locale: str,
     for f in params_by_id_for(equipment_class)[param_id].fields:
         value = parse_field(f.kind, text, f.name)
         if value is None:
+            if f.kind == "standard" and standard_exception(text):
+                # Read as nothing (an exception is not compliance), but say why, so the cell does not look silent.
+                notes.append({"code": "STANDARD_EXCEPTION",
+                              "message": f"the passage on {where} states an exception or deviation from a standard; "
+                                         f"compliance is not read from it"})
             continue
         if not value_in_span(value, text):
             notes.append({"code": "VALUE_NOT_IN_SPAN",
