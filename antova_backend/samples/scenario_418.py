@@ -123,8 +123,8 @@ CELLS["vendor-b"].update({
     "PARAM-09": ("DEVIATION_DOWNGRADE", "b.p09", {"lead_time": "44 weeks"}, None, "0.00"),
     "PARAM-10": ("DEVIATION_DOWNGRADE", "b.p10", {"ld_rate": "0 %", "ld_cap": "0 %"}, None, "0.00"),
     "PARAM-11": ("DEVIATION_DOWNGRADE", "b.p11", {"liability_cap": "20 %"}, None, "0.00"),
-    "PARAM-12": ("OMITTED", "b.p12", {"spares_included": "not included"}, None, "0.00"),
-    "PARAM-13": ("OMITTED", "b.p13", {"supervision_included": "not included"}, None, "0.00"),
+    "PARAM-12": ("OMITTED", "b.p12", {"spares_included": "not included"}, None, "14000.00"),
+    "PARAM-13": ("OMITTED", "b.p13", {"supervision_included": "not included"}, None, "9600.00"),
     "PARAM-14": ("DEVIATION_DOWNGRADE", "b.p14", {"site_altitude": "800 m"}, None, "0.00"),
 })
 CELLS["vendor-c"].update({
@@ -136,13 +136,14 @@ CELLS["vendor-c"].update({
     "PARAM-14": _MANUAL,
 })
 
-# The six new classes are knowingly unpriced in rate table ext_v1, so a deviation in them is a gap
-# the price does not yet cover.
-VENDOR_TOTALS = dict(scenario.VENDOR_TOTALS)
+# Table ext_v1 prices a bid that excludes commissioning spares (14,000.00, one lot) or site supervision
+# (120 h x 60.00 + 2,400.00 = 9,600.00). Delivery, liquidated damages, liability and altitude are knowingly
+# unpriced: the first three are exposures (exposure.py), not adders.
+VENDOR_TOTALS = {**scenario.VENDOR_TOTALS, "vendor-b": ("85250.00", "503250.00")}
 NEGOTIATING_VENDOR = scenario.NEGOTIATING_VENDOR
 CLAWBACK = dict(scenario.CLAWBACK)
 CELL_EXTRAS = copy.deepcopy(scenario.CELL_EXTRAS)
-for _vendor, _params in (("vendor-b", ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-12", "PARAM-13", "PARAM-14")),
+for _vendor, _params in (("vendor-b", ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14")),
                          ("vendor-c", ("PARAM-10",))):
     for _param in _params:
         CELL_EXTRAS[(_vendor, _param)] = {"pricing_status": "UNPRICED"}

@@ -85,7 +85,9 @@ def test_a_bid_that_does_not_state_altitude_needs_inspection_and_says_so(result)
 def test_a_deviation_in_a_class_the_table_has_no_rate_for_is_unpriced_not_free(result):
     cells = _cells(result.tender)
     unpriced = {key for key, cell in cells.items() if cell.pricing_status == "UNPRICED" and key[1] in NEW}
-    assert unpriced == {("vendor-b", p) for p in NEW} | {("vendor-c", "PARAM-10")}
+    # Spares and supervision are priced when a bid excludes them; the rest are exposures or unrated.
+    assert unpriced == {("vendor-b", p) for p in ("PARAM-09", "PARAM-10", "PARAM-11", "PARAM-14")} | {
+        ("vendor-c", "PARAM-10")}
     assert all(cells[key].cost_adder == 0.0 for key in unpriced)
 
 

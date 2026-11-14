@@ -418,8 +418,7 @@
           "spares_included": "not included"
         },
         "secondary_page": null,
-        "adder": "0.00",
-        "pricing_status": "UNPRICED"
+        "adder": "14000.00"
       },
       "PARAM-13": {
         "status": "OMITTED",
@@ -429,8 +428,7 @@
           "supervision_included": "not included"
         },
         "secondary_page": null,
-        "adder": "0.00",
-        "pricing_status": "UNPRICED"
+        "adder": "9600.00"
       },
       "PARAM-14": {
         "status": "DEVIATION_DOWNGRADE",
@@ -602,8 +600,8 @@
     "vendor-b": {
       "name": "VoltSwitch Industrial",
       "headline_price": "418000.00",
-      "total_adders": "61650.00",
-      "true_evaluated_price": "479650.00",
+      "total_adders": "85250.00",
+      "true_evaluated_price": "503250.00",
       "price_status": "UNPRICED_ITEMS"
     },
     "vendor-c": {

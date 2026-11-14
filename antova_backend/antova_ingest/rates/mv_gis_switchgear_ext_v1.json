@@ -12,8 +12,6 @@
     "PARAM-10.ld_rate_short",
     "PARAM-10.ld_cap_short",
     "PARAM-11.liability_cap_short",
-    "PARAM-12.spares_missing",
-    "PARAM-13.supervision_missing",
     "PARAM-14.altitude_short"
   ],
   "policies": {
@@ -153,6 +151,36 @@
         "rate": "175.00",
         "driver": "fixed"
       }
+    ],
+    "PARAM-12.spares_missing": [
+      {
+        "label": "Two years of commissioning spares",
+        "qty": "1",
+        "unit": "lot",
+        "rate": "14000.00",
+        "low": "9000.00",
+        "high": "21000.00",
+        "driver": "fixed"
+      }
+    ],
+    "PARAM-13.supervision_missing": [
+      {
+        "label": "Site supervision of erection and commissioning",
+        "qty": "120",
+        "unit": "h",
+        "rate": "60.00",
+        "driver": "labour"
+      },
+      {
+        "label": "Supervisor travel and subsistence",
+        "qty": "1",
+        "unit": "lot",
+        "rate": "2400.00",
+        "low": "1800.00",
+        "high": "3600.00",
+        "driver": "fixed"
+      }
     ]
-  }
+  },
+  "notes": "PARAM-12 and PARAM-13 are priced only when a bid excludes the item; a bid that says nothing stays at manual inspection with no adder. Their rates are working estimates for the founder to confirm. Delivery delay, liquidated damages and liability are exposures, not adders (antova_ingest/exposure.py), so their classes stay unpriced here."
 }

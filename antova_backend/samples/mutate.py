@@ -460,8 +460,9 @@ def _need_extended(pack: Pack, vendor_id: str, param_id: str) -> None:
 
 
 def _extended_edit(pack: Pack, vendor_id: str, param_id: str, old: str, new: str, *, status: str | None = None,
-                   values: dict | None = None, unpriced: bool = False) -> None:
-    """Rewrite one sentence of a bid and say what the cell becomes. An unpriced deviation keeps its adder at 0."""
+                   values: dict | None = None, unpriced: bool = False, adder: str | None = None) -> None:
+    """Rewrite one sentence of a bid and say what the cell becomes. An unpriced deviation keeps its adder at 0;
+    a priced one gives its adder, and the vendor's totals move with it."""
     _need_extended(pack, vendor_id, param_id)
     pack.replace_text(pack.file_of(vendor_id), old, new)
     cell = pack.cell(vendor_id, param_id)
@@ -472,6 +473,13 @@ def _extended_edit(pack: Pack, vendor_id: str, param_id: str, old: str, new: str
     if unpriced:
         cell["pricing_status"] = "UNPRICED"
         pack.expected["vendors"][vendor_id]["price_status"] = "UNPRICED_ITEMS"
+    if adder is not None:
+        change = float(adder) - float(cell["adder"])
+        cell["adder"] = adder
+        vendor = pack.expected["vendors"][vendor_id]
+        vendor["total_adders"] = f"{float(vendor['total_adders']) + change:.2f}"
+        if vendor["true_evaluated_price"] is not None:
+            vendor["true_evaluated_price"] = f"{float(vendor['true_evaluated_price']) + change:.2f}"
 
 
 @extended_operator
@@ -524,9 +532,9 @@ def spares_silent(pack: Pack, rng: random.Random) -> None:
 
 @extended_operator
 def supervision_optional(pack: Pack, rng: random.Random) -> None:
-    """vendor-c makes site supervision optional: left out of the price, and the gap is unpriced."""
+    """vendor-c makes site supervision optional: left out of the price, so the table prices it (9,600.00)."""
     _extended_edit(pack, "vendor-c", "PARAM-13", "is included in the price.", "is optional and priced on request.",
-                   status="OMITTED", values={"supervision_included": "not included"}, unpriced=True)
+                   status="OMITTED", values={"supervision_included": "not included"}, adder="9600.00")
 
 
 def operators_for(base: str = BASE_TENDER_ID) -> dict[str, Operator]:

@@ -76,12 +76,17 @@ def test_a_table_without_a_class_prices_the_first_class_and_the_new_table_the_ex
     assert costs.load_rate_table("mv_gis_switchgear_v2").equipment_class == BASE
     table = costs.load_rate_table("mv_gis_switchgear_ext_v1")
     assert table.equipment_class == EXT
-    assert {"PARAM-09.lead_time_long", "PARAM-12.spares_missing", "PARAM-14.altitude_short"} <= table.unpriced_classes
+    # Delivery, LD, liability and altitude are unrated (the first three are exposures, not adders);
+    # the two scope exclusions are priced.
+    assert {"PARAM-09.lead_time_long", "PARAM-10.ld_cap_short", "PARAM-14.altitude_short"} <= table.unpriced_classes
+    assert not {"PARAM-12.spares_missing", "PARAM-13.supervision_missing"} & table.unpriced_classes
+    assert {"PARAM-12.spares_missing", "PARAM-13.supervision_missing"} <= set(table.deviation_rates)
 
 
 def test_the_extended_table_prices_the_first_eight_exactly_as_v2_does():
     old, new = costs.load_rate_table("mv_gis_switchgear_v2"), costs.load_rate_table("mv_gis_switchgear_ext_v1")
-    assert new.deviation_rates == old.deviation_rates and new.base_labour_rate == old.base_labour_rate
+    assert {k: v for k, v in new.deviation_rates.items() if k < "PARAM-09"} == old.deviation_rates
+    assert new.base_labour_rate == old.base_labour_rate
 
 
 def test_a_manifest_whose_table_prices_another_class_fails_at_intake(tmp_path):
