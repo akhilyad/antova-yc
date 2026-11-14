@@ -733,6 +733,18 @@ def stage_leveled(bodies: dict) -> dict:
         project=(manifest.project.model_dump(mode="json", exclude_none=True) if manifest.project else None),
     )
 
+    # A gap the table knowingly leaves to the findings register (an exposure) is accepted by a person,
+    # not priced by an override: the flag puts it in front of the review gate.
+    exposure_classes = load_rate_table(manifest.rate_table).exposure_classes
+    for param in tender.parameters:
+        for vendor_id, cell in param.vendors.items():
+            pricing = pricings[_key(vendor_id, param.id)]
+            if (pricing.pricing_status == "UNPRICED" and exposure_classes
+                    and set(pricing.unpriced_classes) <= exposure_classes):
+                add_flag(cell.flags, "EXPOSURE_GAP",
+                         "this gap is money at risk, not a price; the findings register shows the exposure. "
+                         "Approve it to accept the gap as shown, or set an adder if the buyer prices it")
+
     if manifest.equipment_class in FINDINGS_CLASSES:
         tender.findings = findings.build_findings(
             tender, resolutions, requirements, project=tender.project,

@@ -64,6 +64,23 @@ def clarifications_xlsx(rows: list[dict]) -> bytes:
     return _bytes(wb)
 
 
+def _money_cell(money: list[dict], basis: str) -> Any:
+    """The euros of one basis as a number, "not known" when any of them could not be computed, or empty."""
+    entries = [m for m in money if m["basis"] == basis]
+    if not entries:
+        return ""
+    if any(m["amount"] is None for m in entries):
+        return "not known"  # never written as 0
+    return float(sum(Decimal(m["amount"]) for m in entries))
+
+
+def _finding_row(f: dict) -> list[Any]:
+    notes = [m["formula"] or m["reason"] for m in f["money"] if m["formula"] or m["reason"]]
+    pages = "; ".join(dict.fromkeys(f"{c['filename']} p.{c['page']}" for c in f["citations"]))
+    return [f["vendor_id"], f["param_id"], f["severity"], f["kind"], f["message"],
+            _money_cell(f["money"], "adder"), _money_cell(f["money"], "exposure"), " | ".join(notes), pages]
+
+
 def tbe_workbook(
     *,
     brief: Mapping[str, Any],
@@ -124,6 +141,22 @@ def tbe_workbook(
              c["pricing_status"], "yes" if c["is_overridden"] else "", c["override_note"] or "", c["formula"],
              c["source"]] for c in cells],
            [11, 11, 38, 13, 24, 14, 14, 11, 50, 50, 40], money_columns=(5,), wrap_columns=(8, 9))
+
+    findings = brief["tender"].get("findings")
+    if findings is not None:
+        sheet = wb.create_sheet("Findings")
+        _sheet(sheet, ["Vendor ID", "Parameter", "Severity", "Kind", "Finding", "Adder (EUR)", "Exposure (EUR)",
+                       "How the money was found", "Pages"],
+               [_finding_row(f) for f in findings],
+               [11, 11, 10, 20, 70, 14, 16, 80, 40], money_columns=(5, 6), wrap_columns=(4, 7, 8))
+
+    project = brief["tender"].get("project")
+    if project:
+        sheet = wb.create_sheet("Project")
+        _sheet(sheet, ["Field", "Value", "Source", "Note"],
+               [[name, _text(value.get("value")), value.get("source", ""), _text(value.get("note"))]
+                for name, value in project.items()],
+               [26, 18, 16, 60], wrap_columns=(3,))
 
     overrides = wb.create_sheet("Overrides")
     _sheet(overrides, ["Parameter", "Vendor ID", "Adder (EUR)", "Note", "Set by", "Set at"],

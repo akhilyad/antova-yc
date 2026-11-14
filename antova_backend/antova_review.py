@@ -157,7 +157,9 @@ def open_items(tender: TenderPackage, overrides: Mapping[tuple[str, str], Overri
                                       message=_REVIEW_MESSAGES[state]))
             if (p.id, v.id) in overrides:
                 continue
-            if cell.pricing_status == "UNPRICED":
+            # An exposure gap waits on the review flag above (a person accepts it), not on an adder.
+            exposure_gap = any(f.get("code") == "EXPOSURE_GAP" for f in cell.flags)
+            if cell.pricing_status == "UNPRICED" and not exposure_gap:
                 items.append(_item("unpriced", v.id, p.id))
             if cell.status == ComplianceStatus.MANUAL_INSPECTION_REQUIRED:
                 items.append(_item("needs_inspection", v.id, p.id))

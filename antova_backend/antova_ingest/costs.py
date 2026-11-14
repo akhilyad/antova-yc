@@ -92,6 +92,9 @@ class RateTable:
     fx_rates: dict[str, dict] = field(default_factory=dict)
     # The parameter set this table prices. Tables written before the field existed price the first class.
     equipment_class: str = DEFAULT_EQUIPMENT_CLASS
+    # Unpriced classes whose gap is money at risk (an exposure, antova_ingest.exposure), not a price. The review
+    # gate asks a person to accept such a gap instead of asking for an adder.
+    exposure_classes: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -169,8 +172,13 @@ def parse_rate_table(data: dict) -> RateTable:
         if rate == 0:
             raise ConfigError(f"{what}: rate must be greater than zero")
         fx[currency.upper()] = {"rate": rate, "date": str(entry["date"])}
+    exposures = frozenset(data.get("exposure_classes", []))
+    stray = sorted(exposures - unpriced)
+    if stray:
+        raise ConfigError(f"{name}: exposure class {', '.join(stray)} must also be listed under unpriced_classes")
     return RateTable(str(data["version"]), str(data["effective_date"]), str(data["currency"]).upper(), rates,
-                     policies, base_labour, unpriced, fx, str(data.get("equipment_class", DEFAULT_EQUIPMENT_CLASS)))
+                     policies, base_labour, unpriced, fx, str(data.get("equipment_class", DEFAULT_EQUIPMENT_CLASS)),
+                     exposures)
 
 
 def load_rate_table(name: str) -> RateTable:

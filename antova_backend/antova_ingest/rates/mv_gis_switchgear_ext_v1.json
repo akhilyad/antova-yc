@@ -183,5 +183,11 @@
       }
     ]
   },
-  "notes": "PARAM-12 and PARAM-13 are priced only when a bid excludes the item; a bid that says nothing stays at manual inspection with no adder. Their rates are working estimates for the founder to confirm. Delivery delay, liquidated damages and liability are exposures, not adders (antova_ingest/exposure.py), so their classes stay unpriced here. PARAM-15 (standards) is not priced: a missing edition needs a certificate, not a euro figure."
+  "notes": "PARAM-12 and PARAM-13 are priced only when a bid excludes the item; a bid that says nothing stays at manual inspection with no adder. Their rates are working estimates for the founder to confirm. Delivery delay, liquidated damages and liability are exposures, not adders (antova_ingest/exposure.py), so their classes stay unpriced here. PARAM-15 (standards) is not priced: a missing edition needs a certificate, not a euro figure.",
+  "exposure_classes": [
+    "PARAM-09.lead_time_long",
+    "PARAM-10.ld_rate_short",
+    "PARAM-10.ld_cap_short",
+    "PARAM-11.liability_cap_short"
+  ]
 }
