@@ -115,8 +115,8 @@ def _implausible_headlines(headlines: dict[str, float | None]) -> list[str]:
     """
     flagged = _outliers(headlines, HEADLINE_PLAUSIBILITY_SHARE)
     return [
-        f"{vendor_id}: bid price €{headlines[vendor_id]:,.2f} is far from the other bids "
-        f"(median €{flagged[vendor_id]:,.2f}). Check the quoted page."
+        f"{vendor_id}: headline price EUR {headlines[vendor_id]:,.2f} is far from the median "
+        f"of the other bids (EUR {flagged[vendor_id]:,.2f}); check the cited passage"
         for vendor_id in headlines if vendor_id in flagged
     ]
 
@@ -181,9 +181,9 @@ def _outlying_evaluated(financials: list[dict], headlines: dict[str, float | Non
         direction = "above" if price > middle else "below"
         bound = "at least " if status[vendor_id] == "UNPRICED_ITEMS" else ""
         messages.append(
-            f"{vendor_id}: evaluated total {bound}€{price:,.2f} is "
-            f"{abs(price - middle) / middle:.0%} {direction} the other bids' median "
-            f"(€{middle:,.2f}). Its cost adjustments cause most of the difference.")
+            f"{vendor_id}: evaluated price {bound}EUR {price:,.2f} (headline plus priced gaps) is "
+            f"{abs(price - middle) / middle:.0%} {direction} the median of the other bids' evaluated prices "
+            f"(EUR {middle:,.2f}); its priced gaps drive the difference")
     return messages
 
 
@@ -473,8 +473,7 @@ def read_values(param_id: str, citation: Citation, locale: str,
             if f.kind == "standard" and standard_exception(text):
                 # Read as nothing (an exception is not compliance), but say why, so the cell does not look silent.
                 notes.append({"code": "STANDARD_EXCEPTION",
-                              "message": f"The text on {where} lists an exception to the standard, so it was not "
-                                         f"counted as meeting the spec."})
+                              "message": f"the passage on {where} states an exception or deviation from a standard; compliance is not read from it"})
             continue
         if not value_in_span(value, text):
             notes.append({"code": "VALUE_NOT_IN_SPAN",
@@ -556,16 +555,16 @@ def stage_resolved(bodies: dict) -> dict:
             else:
                 head.update(citation=citation, currency=read.currency, original=str(read.amount))
                 if read.per_unit:
-                    warnings.append(f"{vendor_id}: bid price is worded \"{read.per_unit}\". It may be a unit "
-                                    f"rate, not the total. Check the quoted page.")
+                    warnings.append(f"{vendor_id}: headline price is worded \"{read.per_unit}\"; unit rate taken for "
+                                    f"the total? Check the cited passage")
                 converted = costs.convert(read.amount, read.currency, table) if read.currency else None
                 if read.currency is None:
                     head["status"] = "CURRENCY_UNKNOWN"
-                    warnings.append(f"{vendor_id}: bid price {read.amount:,} has no currency. It was not evaluated.")
+                    warnings.append(f"{vendor_id}: headline price {read.amount:,} names no currency; not evaluated")
                 elif converted is None:
                     head["status"] = "FX_MISSING"
-                    warnings.append(f"{vendor_id}: bid price is in {read.currency} and rate table "
-                                    f"{table.version} has no exchange rate for it. It was not evaluated.")
+                    warnings.append(f"{vendor_id}: headline price is in {read.currency} and rate table "
+                                    f"{table.version} has no dated FX rate to {table.currency}; not evaluated")
                 else:
                     head.update(amount=float(converted["amount"]), status="PRICED")
                     if converted["rate"] is not None:
@@ -642,11 +641,11 @@ def stage_checked(bodies: dict) -> dict:
                 # (NOT_STATED, with the pages it searched) or simply said nothing.
                 if param_id in not_stated:
                     add_flag(resolution.flags, "NOT_STATED",
-                             f"Not stated in {entry.file} "
-                             f"(pages {_page_ranges(not_stated[param_id])} searched).")
+                             f"the locator reports this parameter is not stated in {entry.file} "
+                             f"(pages {_page_ranges(not_stated[param_id])} searched)")
                 else:
                     add_flag(resolution.flags, "LOCATOR_SILENT",
-                             f"No answer for this requirement in {entry.file}. Check the bid by hand.")
+                             f"the locator returned neither a passage nor NOT_STATED for this parameter in {entry.file}")
             resolutions[key] = codec.resolution_to_plain(resolution)
     return {"resolutions": resolutions, "warnings": []}
 
@@ -755,7 +754,7 @@ def stage_leveled(bodies: dict) -> dict:
     for v in tender.vendors:
         statuses = [p.vendors[v.id].status for p in tender.parameters]
         if not v.headline_price:
-            v.badge = "Bid price not found"
+            v.badge = "Price not found"
         elif v.id == choice["vendor_id"]:
             v.badge = "Lowest evaluated total"
         elif v.id == apparent_low:

@@ -118,8 +118,8 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         if not usable:
             for e in unused:
                 add_flag(flags, "SWEEP_NOT_USED",
-                         f"Page {e.citation.page} may also mention {f.label} {e.values[f.name].display} "
-                         f"({SECTION_LABELS[e.citation.section].lower()}). Check it.")
+                         f"possible evidence on p.{e.citation.page} not reviewed: the recall sweep read "
+                         f"{f.label} {e.values[f.name].display} in the {SECTION_LABELS[e.citation.section].lower()}, but the locator did not cite it")
             continue
         best = min(_tier(e) for e in usable)
         top = [e for e in usable if _tier(e) == best]
@@ -136,14 +136,13 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         if chosen.source == "sweep":
             sweep_governed.add(f.name)
             add_flag(flags, "SWEEP_GOVERNS",
-                     f"{_where(chosen.citation)} was found in a second pass. "
-                     f"Check the page before you rely on it.")
+                     f"{_where(chosen.citation)} was found by the recall sweep, not by the locator; check the passage before relying on it")
         elif required and not _passes(f, requirement, chosen):
             for e in unused:
                 if _tier(e) < best:
                     add_flag(flags, "SWEEP_STRONGER_PASSING",
-                             f"Page {e.citation.page} may also mention {f.label} {e.values[f.name].display} "
-                             f"({_where(e.citation)}). Check it.")
+                             f"possible evidence on p.{e.citation.page} not reviewed: the recall sweep read "
+                             f"{f.label} {e.values[f.name].display} in stronger evidence ({_where(e.citation)}) than the governing passage")
 
     checks: list[CheckResult] = []
     failing_fields: list[FieldDef] = []

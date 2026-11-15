@@ -359,6 +359,6 @@ def rank_flip(financials: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return {
         "lowest": best["vendor_id"],
         "could_be": rivals,
-        "message": (f"The ranking could change: {best['vendor_id']} is lowest on calculated rates, but at the high end of the "
+        "message": (f"The ranking is not stable: {best['vendor_id']} is lowest on calculated rates, but at the high end of the "
                     f"rate ranges {', '.join(rivals)} could cost less."),
     }
