@@ -181,10 +181,10 @@ VENDOR_TOTALS = {
     "vendor-d": ("13050.00", "385550.00"),
 }
 BADGES = {
-    "vendor-a": "Lowest Evaluated Price",
-    "vendor-b": "Price not found",
-    "vendor-c": "Price not found",
-    "vendor-d": "Apparent Low Bidder",  # the lowest headline, but its price is only a lower bound
+    "vendor-a": "Lowest evaluated total",
+    "vendor-b": "Bid price not found",
+    "vendor-c": "Bid price not found",
+    "vendor-d": "Lowest base bid",  # the lowest headline, but its price is only a lower bound
 }
 CELL_EXTRAS = {
     ("vendor-d", "PARAM-06"): {"pricing_status": "UNPRICED", "flags_include": ["from dispatch"]},

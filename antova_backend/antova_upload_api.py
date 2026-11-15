@@ -83,7 +83,7 @@ def tender_folder(tender_id: str) -> Path:
 def _frozen(db: Session, tender_id: str) -> None:
     meta = TenderRepository(db).get_meta(tender_id)
     if meta is not None and meta.status == "VERIFIED":
-        raise _bad(409, "Withdraw the brief before changing its documents")
+        raise _bad(409, "Reopen the brief before you change its documents.")
 
 
 async def _receive(request: Request, limit: int, into: Path) -> tuple[int, str]:

@@ -114,7 +114,7 @@ def test_a_value_that_looks_like_a_formula_is_written_as_text():
 
 def test_a_draft_cannot_be_exported(client):
     response = client.get(f"{REVIEW}/export-tbe.xlsx")
-    assert response.status_code == 409 and "Verify the brief" in response.json()["detail"]
+    assert response.status_code == 409 and "Sign off the brief" in response.json()["detail"]
 
 
 def test_the_verified_workbook_has_the_evaluation_and_its_audit_trail(client):

@@ -79,10 +79,10 @@ def test_tender_fields(result):
     assert p01.pint_rule == "Ik ≥ 50 kA AND t ≥ 3 s"
     badges = {v.id: v.badge for v in tender.vendors}
     # Amendment A2: Nordwerk has the lowest true evaluated price; VoltSwitch only looks cheapest.
-    assert badges == {"vendor-a": "Lowest Evaluated Price", "vendor-b": "Apparent Low Bidder", "vendor-c": "Bidder"}
+    assert badges == {"vendor-a": "Lowest evaluated total", "vendor-b": "Lowest base bid", "vendor-c": "Bidder"}
     cell = next(p for p in tender.parameters if p.id == "PARAM-01").vendors["vendor-b"]
     assert cell.bbox.startswith("Page 11 (Drawing), BBox [")
-    assert cell.conflict_note.endswith("Drawing governs.")
+    assert cell.conflict_note.endswith("The Drawing takes priority.")
 
 
 def test_progress_stages(expected):
@@ -166,7 +166,7 @@ def test_missing_headline(expected):
     voltswitch = next(v for v in run.tender.vendors if v.id == "vendor-b")
     assert voltswitch.headline_price is None  # unknown is null, never 0
     assert voltswitch.headline_status == "NOT_FOUND"
-    assert voltswitch.badge == "Price not found"
+    assert voltswitch.badge == "Bid price not found"
     assert "vendor-b: headline price not found" in run.warnings
     assert engine.negotiating_vendor_id(run.tender) == "vendor-a"  # A2: lowest true price among priced bids
     assert engine.apparent_low_bidder_id(run.tender) == "vendor-c"

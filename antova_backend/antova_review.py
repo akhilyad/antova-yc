@@ -29,16 +29,16 @@ if TYPE_CHECKING:  # type only: importing antova_db at runtime would build its d
 _CENTS = Decimal("0.01")
 
 MESSAGES = {
-    "unpriced": "Gap found but not priced",
-    "needs_inspection": "Evidence needs inspection",
-    "missing_price": "Bid price not found; fix the source and re-ingest",
-    "review_flag": "Review flag not approved yet",
-    "project_field": "Buyer-entered project value not confirmed yet",
+    "unpriced": "Gap has no price yet. Enter an amount or accept it.",
+    "needs_inspection": "Check this quote against its page.",
+    "missing_price": "Bid price not found. Correct the bid file and process it again.",
+    "review_flag": "Flag not reviewed yet.",
+    "project_field": "Confirm the project value you entered.",
 }
 _REVIEW_MESSAGES = {
-    "open": "Review flag not approved yet",
-    "stale": "Evidence changed since it was approved; review again",
-    "rejected": "Evidence rejected by the reviewer; fix the source and re-ingest",
+    "open": "Flag not reviewed yet.",
+    "stale": "The source page changed after you accepted it. Review it again.",
+    "rejected": "You rejected this quote. Correct the bid file and process it again.",
 }
 
 

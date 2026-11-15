@@ -45,11 +45,11 @@ test('founder withdraws, overrides an adder, verifies, and the share link works 
     .click()
   await expect(page).toHaveURL(/#f-vendor-c-PARAM-05$/)
   const sidenote = page.getByRole('complementary', { name: 'Evidence' })
-  await sidenote.getByLabel('Override adder (€)').fill('2600')
+  await sidenote.getByLabel('New cost adjustment (€)').fill('2600')
   await sidenote.getByLabel('Why').fill(NOTE)
-  await sidenote.getByRole('button', { name: 'Save override' }).click()
-  await expect(sidenote.getByText('Override saved.')).toBeVisible()
-  await expect(sidenote.getByText(`Overridden: ${NOTE}`)).toBeVisible()
+  await sidenote.getByRole('button', { name: 'Save amount' }).click()
+  await expect(sidenote.getByText('Amount saved.')).toBeVisible()
+  await expect(sidenote.getByText(`Amount edited: ${NOTE}`)).toBeVisible()
 
   // Verify: the share link is copied and works again, with the override in it.
   await page.getByRole('button', { name: 'Mark verified' }).click()

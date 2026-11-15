@@ -360,7 +360,7 @@ export function PulseStripeHero({
 
       {/* Drifting Marquee Logo/Vendor Band */}
       {logos && logos.length > 0 && (
-        <div className={styles.band} aria-label="Key Documents & Bidders">
+        <div className={styles.band} aria-label="Documents and bidders">
           <div className={styles.track}>
             {[0, 1].map((copyIdx) => (
               <div

@@ -115,11 +115,11 @@ def _tender(tender_id="TENDER-T1"):
         compute_cogs=0.31, equipment_class="mv_gis_switchgear", rate_table_version="mv_gis_switchgear_v1",
         vendors=[
             engine.Vendor(id="vendor-b", name="VoltSwitch", country="TR", headline_price=418000.0, doc_name="b.pdf",
-                          cover_claim="claim", badge="Apparent Low Bidder",
+                          cover_claim="claim", badge="Lowest base bid",
                           headline_citation={"filename": "b.pdf", "page": 22, "bbox": [1.0, 2.0, 3.0, 4.0],
                                              "quote": "€418,000", "section": "commercial"}),
             engine.Vendor(id="vendor-a", name="Nordwerk", country="DE", headline_price=452000.0, doc_name="a.pdf",
-                          cover_claim="claim", badge="Compliant Baseline"),
+                          cover_claim="claim", badge="Meets spec"),
         ],
         parameters=[engine.EngineeringParameter(
             id="PARAM-01", category="Electrical", name="Ik", mr_requirement="50 kA for 3 s",

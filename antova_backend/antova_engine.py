@@ -217,14 +217,14 @@ def negotiating_choice(
             continue
         if f["price_status"] == "UNPRICED_ITEMS":
             items = [i["param_id"] for i in f["itemized_breakdown"] if i["pricing_status"] == "UNPRICED"]
-            detail = f"has deviations with no rate ({', '.join(items)}), so its price is only a lower bound"
+            detail = f"has gaps with no price ({', '.join(items)}), so its evaluated total is a minimum"
         else:
             detail = _EXCLUSION_DETAIL.get(f["price_status"], "has no complete price")
         excluded.append({"vendor_id": f["vendor_id"], "reason": f["price_status"], "detail": detail})
     best = min(priced, key=lambda f: f["true_evaluated_price"]) if priced else None
     return {
         "vendor_id": best["vendor_id"] if best else None,
-        "basis": "lowest true evaluated price",
+        "basis": "lowest evaluated total",
         "true_evaluated_price": best["true_evaluated_price"] if best else None,
         "lowest_headline": apparent_low_bidder_id(tender),
         "excluded": excluded,
@@ -359,6 +359,6 @@ def rank_flip(financials: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return {
         "lowest": best["vendor_id"],
         "could_be": rivals,
-        "message": (f"The ranking is not stable: {best['vendor_id']} is lowest at its base price, but within the "
-                    f"adder ranges {', '.join(rivals)} could be lower."),
+        "message": (f"The ranking could change: {best['vendor_id']} is lowest on calculated rates, but at the high end of the "
+                    f"rate ranges {', '.join(rivals)} could cost less."),
     }

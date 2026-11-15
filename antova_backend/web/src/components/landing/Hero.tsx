@@ -24,10 +24,10 @@ const HERO_LOGOS = [
   'VoltSwitch Industrial',
   'Nordwerk Power',
   'Deltaport AG',
-  'Equipment Purchase List',
-  'Contract Agreement',
-  'Pricing & Extra Fees',
-  'Delivery & Service Terms',
+  'Equipment list',
+  'Contract',
+  'Prices and extras',
+  'Delivery and service terms',
 ] as const
 
 /**
@@ -87,7 +87,7 @@ export function Hero({
                   <span className={styles.trustCheck} aria-hidden="true">
                     ✓
                   </span>{' '}
-                  Done in Minutes
+                  Done in minutes
                 </span>
                 <span className={styles.trustDot} aria-hidden="true">
                   ·
@@ -96,7 +96,7 @@ export function Hero({
                   <span className={styles.trustCheck} aria-hidden="true">
                     ✓
                   </span>{' '}
-                  Direct Link to Every Page
+                  A link to every page
                 </span>
                 <span className={styles.trustDot} aria-hidden="true">
                   ·
@@ -105,7 +105,7 @@ export function Hero({
                   <span className={styles.trustCheck} aria-hidden="true">
                     ✓
                   </span>{' '}
-                  Your Data Stays Private
+                  Your data stays private
                 </span>
               </div>
             </div>
@@ -114,9 +114,9 @@ export function Hero({
             <div className={styles.proofHeader} aria-hidden="true">
               <div className={styles.proofStatus}>
                 <span className={styles.livePulse} />
-                <span className={styles.proofTag}>LIVE DEMO</span>
+                <span className={styles.proofTag}>Live demo</span>
               </div>
-              <span className={styles.proofId}>3 BIDS CHECKED</span>
+              <span className={styles.proofId}>3 bids checked</span>
             </div>
             <p className={styles.label}>{label}</p>
             <RankingFlip levels={levels} play />
@@ -134,7 +134,7 @@ export function Hero({
                 </span>
               </button>
               <span className={styles.verifiedStamp} aria-hidden="true">
-                REAL TOTAL COST
+                Evaluated total
               </span>
             </div>
           </div>

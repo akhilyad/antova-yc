@@ -615,7 +615,7 @@ describe('Review: brief', () => {
     renderAt(`${BRIEF_PATH}#f-vendor-c-PARAM-05`, { token: TEST_REVIEW_TOKEN })
     await briefLoaded()
     const note = within(margin())
-    expect(note.getByText('Withdraw the brief before changing overrides')).toBeInTheDocument()
+    expect(note.getByText('Reopen the brief before you edit amounts.')).toBeInTheDocument()
     expect(note.getByLabelText(copy.review.override.label)).toBeDisabled()
     expect(note.getByRole('button', { name: copy.review.override.save })).toBeDisabled()
   })

@@ -36,7 +36,7 @@ from antova_review import (
 _CENTS = Decimal("0.01")
 REVIEW_CACHE = "private, no-store"
 log = logging.getLogger(__name__)
-OVERRIDES_LOCKED = "Withdraw the brief before changing overrides"
+OVERRIDES_LOCKED = "Reopen the brief before you edit amounts."
 
 router = APIRouter(prefix="/api/review", tags=["Review"], dependencies=[Depends(require_review_token)])
 
@@ -50,7 +50,7 @@ class OverrideBody(BaseModel):
     @classmethod
     def _whole_cents(cls, value: Decimal) -> Decimal:
         if value != value.quantize(_CENTS):
-            raise ValueError("adder_eur has at most 2 decimal places")
+            raise ValueError("Use at most 2 decimal places for the amount.")
         return value.copy_abs().quantize(_CENTS)  # copy_abs: -0 is 0
 
 
@@ -225,7 +225,7 @@ def export_tbe(tender_id: str, db: Session = Depends(get_db)):
     reviews behind it, and the clarification log. Only a VERIFIED brief can be exported."""
     loaded = _loaded(db, tender_id)
     if loaded.meta.status != "VERIFIED":
-        return JSONResponse(status_code=409, content={"detail": "Verify the brief before exporting it"})
+        return JSONResponse(status_code=409, content={"detail": "Sign off the brief before you download the workbook."})
     payload = brief(loaded)
     cells_by_key = {(p.id, vid): c for p in loaded.tender.parameters for vid, c in p.vendors.items()}
     cells = []
@@ -251,14 +251,14 @@ def export_tbe(tender_id: str, db: Session = Depends(get_db)):
 
 
 RUN_CHANGED = {
-    "detail": "This tender was ingested again after you opened it. Reload it and check it before verifying.",
+    "detail": "This tender was processed again after you opened it. Reload it and check it before you sign off.",
     "code": "run_changed",
 }
 
 
 def _open_items_conflict(items) -> JSONResponse:
     return JSONResponse(status_code=409, content={
-        "detail": "Open items remain", "open_items": [asdict(item) for item in items],
+        "detail": "Resolve the open items before you sign off.", "open_items": [asdict(item) for item in items],
     })
 
 

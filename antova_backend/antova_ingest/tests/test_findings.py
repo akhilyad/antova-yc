@@ -90,7 +90,7 @@ def test_a_priced_gap_shows_its_rate_table_lines_and_total(base):
 def test_an_unrated_gap_is_unknown_never_zero(base):
     (finding,) = _by(base.tender.findings, "vendor-b", "PARAM-09", "deviation")
     assert [(m["basis"], m["amount"], m["reason"]) for m in finding["money"]] == [
-        ("adder", None, "the rate table has no rate for this gap")]
+        ("adder", None, "The rate table has no price for this gap.")]
 
 
 def test_liability_exposure_names_what_it_was_computed_from(base):

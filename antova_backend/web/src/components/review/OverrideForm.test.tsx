@@ -91,7 +91,7 @@ describe('OverrideForm', () => {
     server.use(
       http.put('/api/review/tenders/:tenderId/overrides/:paramId/:vendorId', () =>
         HttpResponse.json(
-          { detail: 'Withdraw the brief before changing overrides' },
+          { detail: 'Reopen the brief before you edit amounts.' },
           { status: 409 },
         ),
       ),
@@ -101,7 +101,7 @@ describe('OverrideForm', () => {
     await user.type(screen.getByLabelText(copy.review.override.why), 'Vendor clarification')
     await user.click(screen.getByRole('button', { name: copy.review.override.save }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Withdraw the brief before changing overrides',
+      'Reopen the brief before you edit amounts.',
     )
   })
 

@@ -29,7 +29,7 @@ export function HowItWorks({ id, onWatch }: HowItWorksProps) {
     <section id={id} aria-labelledby={headingId} className={styles.section}>
       <div className={styles.header}>
         <div className={styles.sectionBadge} aria-hidden="true">
-          <span>● THREE SIMPLE STEPS</span>
+          <span>Three steps</span>
         </div>
         <h2 id={headingId} className={styles.heading}>
           {heading}

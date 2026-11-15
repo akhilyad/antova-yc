@@ -99,7 +99,7 @@ def test_verified_and_draft_briefs(exported):
     assert "compute_cogs" in draft["tender"]
     assert draft["verified_at"] is None
     assert draft["open_items"] == [{"kind": "unpriced", "vendor_id": "vendor-c", "param_id": "PARAM-05",
-                                    "message": "Gap found but not priced"}]
+                                    "message": "Gap has no price yet. Enter an amount or accept it."}]
     cell = next(p for p in draft["tender"]["parameters"] if p["id"] == "PARAM-05")["vendors"]["vendor-c"]
     assert (cell["pricing_status"], cell["cost_lines"], cell["cost_adder"]) == ("UNPRICED", [], 0.0)
     # The draft is a copy: the verified brief's cell is untouched.

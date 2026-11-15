@@ -54,7 +54,7 @@ def test_the_sample_under_the_strict_table_has_one_open_item():
     """Rate table v2 leaves VoltSwitch's dispatch-basis warranty unpriced, and an override resolves it."""
     tender = sample_tender()
     assert open_items(tender, {}) == [
-        OpenItem(kind="unpriced", vendor_id="vendor-b", param_id="PARAM-06", message="Gap found but not priced")]
+        OpenItem(kind="unpriced", vendor_id="vendor-b", param_id="PARAM-06", message="Gap has no price yet. Enter an amount or accept it.")]
     priced = {("PARAM-06", "vendor-b"): Override(adder_eur=Decimal("9300.00"), note="founder's price")}
     assert open_items(tender, priced) == []
 
@@ -63,9 +63,9 @@ def test_open_items_unpriced_and_inspection():
     items = open_items(_tender_with_open_cells(), {})
     assert items == [
         OpenItem(kind="needs_inspection", vendor_id="vendor-a", param_id="PARAM-05",
-                 message="Evidence needs inspection"),
+                 message="Check this quote against its page."),
         OpenItem(kind="unpriced", vendor_id="vendor-c", param_id="PARAM-03",
-                 message="Gap found but not priced"),
+                 message="Gap has no price yet. Enter an amount or accept it."),
     ]
 
 
@@ -94,7 +94,7 @@ def test_missing_headline_is_open_item():
     tender = _clean_sample(headlines={"vendor-a": 452000.0, "vendor-b": 0.0, "vendor-c": 439000.0})
     assert open_items(tender, {}) == [
         OpenItem(kind="missing_price", vendor_id="vendor-b", param_id=None,
-                 message="Bid price not found; fix the source and re-ingest"),
+                 message="Bid price not found. Correct the bid file and process it again."),
     ]
 
 
@@ -153,7 +153,7 @@ def test_brief_payload_keys_and_override_shape():
     # The overridden unpriced cell is resolved; the inspection cell is still open.
     assert payload["open_items"] == [
         {"kind": "needs_inspection", "vendor_id": "vendor-a", "param_id": "PARAM-05",
-         "message": "Evidence needs inspection"},
+         "message": "Check this quote against its page."},
     ]
     json.dumps(payload)  # the payload goes straight into HTTP responses and fixtures
 

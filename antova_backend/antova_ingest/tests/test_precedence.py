@@ -46,7 +46,7 @@ def test_voltswitch_p01_conflict():
     assert r.status == S.CONFLICT_DOWNGRADE
     assert r.primary.page == 11
     assert r.secondary.page == 2
-    assert r.conflict_note == "Cover letter p.2 claims 50 kA / 3 s; Drawing p.11 states 31.5 kA / 1 s. Drawing governs."
+    assert r.conflict_note == "Cover letter p.2 says 50 kA / 3 s. Drawing p.11 says 31.5 kA / 1 s. The Drawing takes priority."
     assert len(r.checks) == 2
     assert all(c.passed is False for c in r.checks)
     assert r.checks[0].citation_ref == "test.pdf#p11"
@@ -57,7 +57,7 @@ def test_voltswitch_p04_conflict():
     r = run("PARAM-04", [key("b.p04", "bom"), key("b.p04sec", "compliance_table")])
     assert r.status == S.CONFLICT_DOWNGRADE
     assert r.conflict_note == (
-        "Compliance table p.3 claims IEC 61850 Ed. 2 with PRP; BOM p.15 states not IEC 61850. BOM governs.")
+        "Compliance table p.3 says IEC 61850 Ed. 2 with PRP. BOM p.15 says not IEC 61850. The BOM takes priority.")
 
 
 def test_fat_zero_is_omitted():

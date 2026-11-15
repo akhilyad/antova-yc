@@ -139,18 +139,18 @@ def build_findings(
                 kind = {"DEVIATION_DOWNGRADE": "deviation", "CONFLICT_DOWNGRADE": "conflict", "OMITTED": "omitted"}[
                     cell.status.value]
                 if cell.pricing_status == "UNPRICED" and not adder:
-                    money.append(Money("adder", "rate_table", None, reason="the rate table has no rate for this gap"))
+                    money.append(Money("adder", "rate_table", None, reason="The rate table has no price for this gap."))
                 money.extend(_exposures(param, resolution, requirements.get(param.id, {}), value, contract, estimates))
                 finding = Finding(vendor.id, param.id, kind, severity, _message(cell, param),
                                   _citations(cell.citation, cell.secondary_citation, mr), tuple(money))
             elif cell.status == engine.ComplianceStatus.MANUAL_INSPECTION_REQUIRED:
                 finding = Finding(vendor.id, param.id, "unstated", severity,
-                                  f"{param.name} could not be established from the bid; ask the vendor",
+                                  f"{param.name} is not clear from the bid. Ask the vendor.",
                                   _citations(cell.citation, mr), ())
             elif cell.evidence == "claim_only":
                 finding = Finding(vendor.id, param.id, "claim_only", "minor",
-                                  f"{param.name} is claimed in a cover letter or compliance table, not shown "
-                                  f"in a datasheet, drawing or test report", _citations(cell.citation), ())
+                                  f"{param.name} appears only in a cover letter or compliance table, not shown "
+                                  f"in a datasheet, drawing or test report.", _citations(cell.citation), ())
             if finding:
                 found.append((v_index, SEVERITY_RANK[finding.severity], p_index, finding))
 
@@ -209,7 +209,7 @@ def _schedule_finding(vendor_id, param, resolution, incoterm_resolution, project
         return None
     if result.outcome == "manual":
         return Finding(vendor_id, param.id, "schedule_unassessed", "minor",
-                       f"Delivery date not assessed: {result.reason}", citations, ())
+                       f"Delivery date not checked: {result.reason}", citations, ())
     weeks_late = Decimal(-result.float_days) / 7
     cost = estimates.get("delay_cost_per_week")
     e = exposure.delay_cost(weeks_late, cost)
