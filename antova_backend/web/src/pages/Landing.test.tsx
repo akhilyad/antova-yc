@@ -83,9 +83,9 @@ describe('Landing', () => {
     expect(within(hero).getByText(copy.landing.recheckTerms)).toBeInTheDocument()
 
     // Trust badges alignment
-    expect(within(hero).getByText('Done in Minutes')).toBeInTheDocument()
-    expect(within(hero).getByText('Direct Link to Every Page')).toBeInTheDocument()
-    expect(within(hero).getByText('Your Data Stays Private')).toBeInTheDocument()
+    for (const badge of copy.landing.trustBadges) {
+      expect(within(hero).getByText(badge)).toBeInTheDocument()
+    }
   })
 
   it('nav recheck fills once the hero buttons scroll away, and empties when they return', () => {
@@ -266,15 +266,13 @@ describe('Landing', () => {
 
     // First question is open by default
     expect(buttons[0]).toHaveAttribute('aria-expanded', 'true')
-    expect(
-      within(faq).getByText(/Low bids often leave out scope, and the vendor charges for it later/i),
-    ).toBeInTheDocument()
+    expect(within(faq).getByText(copy.landing.faq[0]!.answer!)).toBeInTheDocument()
 
     // Second question starts closed, expands on click
     expect(buttons[1]).toHaveAttribute('aria-expanded', 'false')
     await user.click(buttons[1]!)
     expect(buttons[1]).toHaveAttribute('aria-expanded', 'true')
-    expect(within(faq).getByText(/Regular AI guesses and makes mistakes/i)).toBeInTheDocument()
+    expect(within(faq).getByText(copy.landing.faq[1]!.answer!)).toBeInTheDocument()
   })
 
   it('Section B displays side-by-side comparison box showing how a buyer gets tricked', () => {
@@ -285,21 +283,21 @@ describe('Landing', () => {
     expect(within(section).getByText(copy.landing.sideBySide.subheading)).toBeInTheDocument()
 
     // Box 1 (Promised price)
-    expect(within(section).getByText('PAGE 1 · PROMISED PRICE')).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.box1.label)).toBeInTheDocument()
     expect(within(section).getByText(/Full system supply and delivery/)).toBeInTheDocument()
-    expect(within(section).getByText('$1,200,000')).toBeInTheDocument()
-    expect(within(section).getByText('Looks like the winning bid')).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.box1.price)).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.box1.note)).toBeInTheDocument()
 
     // Box 2 (Hidden notes)
-    expect(within(section).getByText('PAGE 48 · HIDDEN NOTES')).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.box2.label)).toBeInTheDocument()
     expect(
       within(section).getByText(/Does not include setup, testing, or basic warranty/),
     ).toBeInTheDocument()
-    expect(within(section).getByText('+$185,000 in surprise bills later')).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.box2.addedCost)).toBeInTheDocument()
 
     // Bottom Result Bar
-    expect(within(section).getByText('REAL TOTAL COST: $1,385,000')).toBeInTheDocument()
-    expect(within(section).getByText('Rank drops from 1st to 3rd')).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.resultBar.label)).toBeInTheDocument()
+    expect(within(section).getByText(copy.landing.sideBySide.resultBar.tag)).toBeInTheDocument()
     expect(
       within(section).getByText(/Catch missing costs before you sign, not after work starts/),
     ).toBeInTheDocument()
