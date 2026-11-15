@@ -145,7 +145,7 @@ def test_reingest_with_changed_evidence_makes_the_approval_stale(stored, repo, t
     cell = _cell(changed.tender)
     assert cell.flags and review_state(cell, latest[CELL]) == "stale"
     items = _open(changed.tender, latest)
-    assert [(i.kind, i.message) for i in items] == [("review_flag", "Evidence changed since it was approved; review again")]
+    assert [(i.kind, i.message) for i in items] == [("review_flag", "The source page changed after you accepted it. Review it again.")]
 
 
 def test_unflagged_cells_need_no_review():

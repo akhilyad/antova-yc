@@ -129,7 +129,7 @@ def test_failing_sweep_candidate_overrides_a_passing_cover_claim():
     r = resolve(param, requirement("PARAM-01"), [cover, swept], "vendor-x")
     assert r.status == ComplianceStatus.CONFLICT_DOWNGRADE
     assert r.primary.page == 11 and r.secondary.page == 2
-    assert any(f["code"] == "SWEEP_GOVERNS" and "recall sweep" in f["message"] for f in r.flags)
+    assert any(f["code"] == "SWEEP_GOVERNS" and "second pass" in f["message"] for f in r.flags)
 
 
 def test_failing_sweep_candidate_alone_is_a_flagged_deviation():

@@ -49,7 +49,7 @@ def test_omitted_keeps_the_conflicting_claim_as_secondary():
     r = resolve(PARAMS_BY_ID["PARAM-05"], requirement("PARAM-05"), [claim, plan], "vendor-x")
     assert r.status == ComplianceStatus.OMITTED
     assert (r.primary.page, r.secondary.page) == (18, 2)
-    assert "Cover letter p.2 claims 5" in r.conflict_note
+    assert "Cover letter p.2 says 5" in r.conflict_note
 
 
 def test_omitted_without_a_claim_has_no_secondary():

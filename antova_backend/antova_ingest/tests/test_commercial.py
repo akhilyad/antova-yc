@@ -113,8 +113,8 @@ def test_per_bay_headline_is_reported_as_read_with_a_warning(tmp_path):
     vendor_id = expected["per_unit_headline"]
     vendor = next(v for v in result.tender.vendors if v.id == vendor_id)
     assert vendor.headline_price == 38000.0  # as read: a person corrects it, the pipeline does not
-    assert any(w.startswith(f"{vendor_id}: headline price") and "per bay" in w for w in result.warnings)
-    assert any(w.startswith(f"{vendor_id}: headline price") and "median" in w for w in result.warnings)
+    assert any(w.startswith(f"{vendor_id}: bid price") and "per bay" in w for w in result.warnings)
+    assert any(w.startswith(f"{vendor_id}: bid price") and "median" in w for w in result.warnings)
 
 
 # --- headline plausibility: 50% from the median of the others ----------------------------
@@ -137,7 +137,7 @@ def test_foreign_currency_without_an_fx_rate_is_unpriced(tmp_path):
     assert vendor.headline_original == expected["foreign_currency"]["amount"]
     row = _by_vendor(engine.evaluate_vendor_financials(result.tender, engine.SensitivitySettings(), []))[vendor_id]
     assert (row["true_evaluated_price"], row["price_status"]) == (None, "FX_MISSING")
-    assert any(f"{vendor_id}: headline price is in USD" in w for w in result.warnings)
+    assert any(f"{vendor_id}: bid price is in USD" in w for w in result.warnings)
 
 
 def test_dated_fx_rate_converts_and_is_recorded():
@@ -297,7 +297,7 @@ def test_rank_flip_warning_when_the_lowest_vendor_could_change():
     flip = engine.rank_flip(wide)
     # vendor-a is 452,000 with no adders; vendor-c could be as low as 451,000.
     assert flip["lowest"] == "vendor-a" and flip["could_be"] == ["vendor-c"]
-    assert "not stable" in flip["message"]
+    assert "ranking could change" in flip["message"].lower()
 
 
 def test_rank_flip_ignores_vendors_without_a_full_price():
@@ -325,8 +325,8 @@ def test_an_evaluated_price_far_from_the_others_is_warned_about_when_its_headlin
     headlines = {"a": 452000.0, "b": 418000.0, "c": 439000.0}
     financials = [_fin("a", 452000.0), _fin("b", 603070.0, "UNPRICED_ITEMS"), _fin("c", 454000.0)]
     (message,) = _outlying_evaluated(financials, headlines)
-    assert message == ("b: evaluated price at least EUR 603,070.00 (headline plus priced gaps) is 33% above the "
-                       "median of the other bids' evaluated prices (EUR 453,000.00); its priced gaps drive the difference")
+    assert message == ("b: evaluated total at least €603,070.00 is 33% above the other bids' median "
+                       "(€453,000.00). Its cost adjustments cause most of the difference.")
 
 
 def test_the_evaluated_rule_is_tighter_than_the_headline_rule_and_stops_at_its_share():
@@ -353,8 +353,7 @@ def test_an_unknown_evaluated_price_takes_no_part():
 
 def test_the_headline_messages_are_unchanged_by_the_shared_rule():
     assert _implausible_headlines({"a": 452000.0, "b": 439000.0, "c": 890000.0}) == [
-        "c: headline price EUR 890,000.00 is far from the median of the other bids (EUR 445,500.00); "
-        "check the cited passage"]
+        "c: bid price €890,000.00 is far from the other bids (median €445,500.00). Check the quoted page."]
 
 
 @pytest.mark.parametrize("base", ["TENDER-2026-402", "TENDER-2026-418"])
@@ -366,6 +365,6 @@ def test_a_low_headline_whose_priced_gaps_make_it_the_outlier_is_warned_about(ba
     key = json.loads((target / "expected.json").read_text(encoding="utf-8"))
     result = run_ingest(target, locator=AnswerKeyLocator(key))
     assert compare_to_answer_key(result.tender, key, result) == []
-    assert not any(w.startswith("vendor-b: headline price") for w in result.warnings)
-    assert [w.split(" (")[0] for w in result.warnings if "evaluated price" in w] == [
-        f"vendor-b: evaluated price at least EUR {float(key['vendors']['vendor-b']['true_evaluated_price']):,.2f}"]
+    assert not any(w.startswith("vendor-b: bid price") for w in result.warnings)
+    assert [w.split(" is ")[0] for w in result.warnings if "evaluated total" in w] == [
+        f"vendor-b: evaluated total at least €{float(key['vendors']['vendor-b']['true_evaluated_price']):,.2f}"]

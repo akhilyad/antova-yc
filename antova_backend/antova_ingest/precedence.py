@@ -118,7 +118,7 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         if not usable:
             for e in unused:
                 add_flag(flags, "SWEEP_NOT_USED",
-                         f"Page {e.citation.page} may also mention {f.label} {e.values[f.name].display} "
+                         f"p.{e.citation.page} may also mention {f.label} {e.values[f.name].display} "
                          f"({SECTION_LABELS[e.citation.section].lower()}). Check it.")
             continue
         best = min(_tier(e) for e in usable)

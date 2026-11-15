@@ -161,7 +161,7 @@ def drop_locator_entry(pack: Pack, rng: random.Random) -> None:
                            if not (c["param_id"] == param_id and c["page"] == cell["page"])]
     if len(ideal["candidates"]) == before:
         raise MutationError("the failing passage is not in the locate answer")
-    pack.expect_flag(vendor_id, param_id, "recall sweep")
+    pack.expect_flag(vendor_id, param_id, "second pass")
     pack.expected.setdefault("dropped", []).append({"vendor_id": vendor_id, "param_id": param_id,
                                                     "page": cell["page"]})
 
@@ -206,7 +206,7 @@ def missing_headline(pack: Pack, rng: random.Random) -> None:
     pack.remove_block(filename, ideal["headline_price"]["quote"])
     ideal["headline_price"] = None
     vendor = pack.expected["vendors"][vendor_id]
-    vendor.update({"headline_price": None, "true_evaluated_price": None, "badge": "Price not found",
+    vendor.update({"headline_price": None, "true_evaluated_price": None, "badge": "Bid price not found",
                    "price_status": "NO_HEADLINE"})
     pack.expect_warning(f"{vendor_id}: headline price not found")
     pack.expected.pop("clawback", None)  # the negotiating vendor may have changed
@@ -239,8 +239,8 @@ def per_bay_headline(pack: Pack, rng: random.Random) -> None:
     vendor["headline_price"] = "38000.00"
     vendor["true_evaluated_price"] = f"{38000 + float(vendor['total_adders']):.2f}"
     pack.expected["per_unit_headline"] = vendor_id
-    pack.expect_warning(f"{vendor_id}: headline price is worded \"per bay\"")
-    pack.expect_warning(f"{vendor_id}: headline price EUR 38,000.00 is far from the median")
+    pack.expect_warning(f"{vendor_id}: bid price is worded \"per bay\"")
+    pack.expect_warning(f"{vendor_id}: bid price €38,000.00 is far from")
     pack.expected.pop("clawback", None)
 
 
@@ -255,9 +255,9 @@ def currency_mismatch(pack: Pack, rng: random.Random) -> None:
     filename, sentence = _price_sentence(pack, vendor_id)
     pack.replace_text(filename, sentence, "Total lump-sum price for the complete scope: USD 455,000")
     pack.expected["vendors"][vendor_id].update({
-        "headline_price": None, "true_evaluated_price": None, "badge": "Price not found", "price_status": "FX_MISSING"})
+        "headline_price": None, "true_evaluated_price": None, "badge": "Bid price not found", "price_status": "FX_MISSING"})
     pack.expected["foreign_currency"] = {"vendor_id": vendor_id, "currency": "USD", "amount": "455000"}
-    pack.expect_warning(f"{vendor_id}: headline price is in USD")
+    pack.expect_warning(f"{vendor_id}: bid price is in USD")
     pack.expected.pop("clawback", None)
 
 
@@ -299,7 +299,7 @@ def costly_gap(pack: Pack, rng: random.Random) -> None:
     vendor = pack.expected["vendors"]["vendor-b"]
     vendor["total_adders"] = f"{float(vendor['total_adders']) + change:.2f}"
     vendor["true_evaluated_price"] = f"{float(vendor['true_evaluated_price']) + change:.2f}"
-    pack.expect_warning("vendor-b: evaluated price at least EUR")
+    pack.expect_warning("vendor-b: evaluated total at least €")
     pack.expected.pop("clawback", None)  # the round-3 concession includes the busbar gap
 
 
@@ -417,7 +417,7 @@ def corrupt_pdf(pack: Pack, rng: random.Random) -> None:
     del pack.expected["ideal_locate"][filename]
     _blank_cells(pack, vendor_id, sorted(pack.expected["cells"][vendor_id]))
     pack.expected["vendors"][vendor_id].update({
-        "headline_price": None, "true_evaluated_price": None, "badge": "Price not found", "price_status": "NO_HEADLINE"})
+        "headline_price": None, "true_evaluated_price": None, "badge": "Bid price not found", "price_status": "NO_HEADLINE"})
     pack.expect_warning(f"{vendor_id}: cannot open PDF")
     pack.expected["corrupt"] = {"vendor_id": vendor_id}
 
@@ -547,7 +547,7 @@ def spares_silent(pack: Pack, rng: random.Random) -> None:
     ideal = pack.locate(filename)
     ideal["candidates"] = [c for c in ideal["candidates"] if not (c["param_id"] == "PARAM-12" and c["quote"] == quote)]
     _blank_cells(pack, "vendor-a", ["PARAM-12"])
-    pack.expect_flag("vendor-a", "PARAM-12", "is not stated in")
+    pack.expect_flag("vendor-a", "PARAM-12", "Not stated in")
 
 
 @extended_operator
@@ -571,7 +571,7 @@ def standard_exception(pack: Pack, rng: random.Random) -> None:
     _need_extended(pack, "vendor-a", "PARAM-15")
     pack.replace_text(pack.file_of("vendor-a"), "IEC 62271-1:2017.", "IEC 62271-1:2017, except clause 6.2.")
     _blank_cells(pack, "vendor-a", ["PARAM-15"])
-    pack.expect_flag("vendor-a", "PARAM-15", "states an exception")
+    pack.expect_flag("vendor-a", "PARAM-15", "lists an exception")
 
 
 @extended_operator

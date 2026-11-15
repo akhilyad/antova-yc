@@ -378,10 +378,9 @@ def test_i1_headline_far_from_the_other_bids_is_flagged(expected):
     run = run_ingest(PACK, locator=locator)
     voltswitch = next(v for v in run.tender.vendors if v.id == "vendor-b")
     assert voltswitch.headline_price == 1300.0  # reported as read, never corrected
-    flagged = [w for w in run.warnings if w.startswith("vendor-b: headline price")]
-    assert flagged == ["vendor-b: headline price EUR 1,300.00 is far from the median of the other bids "
-                       "(EUR 445,500.00); check the cited passage"]
-    assert not [w for w in run.warnings if w.startswith(("vendor-a: headline", "vendor-c: headline"))]
+    flagged = [w for w in run.warnings if w.startswith("vendor-b: bid price")]
+    assert flagged == ["vendor-b: bid price €1,300.00 is far from the other bids (median €445,500.00). Check the quoted page."]
+    assert not [w for w in run.warnings if w.startswith(("vendor-a: bid price", "vendor-c: bid price"))]
 
 
 def test_i1_plausible_headlines_raise_no_warning(expected):
