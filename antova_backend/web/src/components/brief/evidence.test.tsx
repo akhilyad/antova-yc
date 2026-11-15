@@ -143,7 +143,9 @@ describe('Sidenote', () => {
       />,
     )
     const priced = region("How it's priced")
-    expect(within(priced).getByText("Overridden: engineer's estimate")).toBeInTheDocument()
+    expect(
+      within(priced).getByText(copy.review.override.badge("engineer's estimate")),
+    ).toBeInTheDocument()
     expect(within(priced).getByText('+€12,000')).toBeInTheDocument()
     // The rate-table figure it replaces is shown struck.
     expect(within(priced).getByText('€18,500').closest('s')).not.toBeNull()

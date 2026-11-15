@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_RATES } from '../../api/client'
 import { Brief } from '../../api/schemas'
+import { copy } from '../../content/copy'
 import { levelTender, type VendorLevel } from '../../domain/leveling'
 import verifiedJson from '../../test/fixtures/verified-brief.json'
 import { renderToString } from 'react-dom/server'
@@ -48,7 +49,7 @@ describe('RankingFlip', () => {
     const volt = container.querySelector('line[data-vendor="vendor-b"]')
     expect(volt).toHaveAttribute('data-worsened', 'true')
     expect(volt).toHaveAttribute('stroke-dasharray')
-    expect(screen.getByText('1st → 3rd')).toBeInTheDocument()
+    expect(screen.getByText(copy.brief.ranking.change({ from: '1st', to: '3rd' }))).toBeInTheDocument()
 
     for (const id of ['vendor-a', 'vendor-c']) {
       const line = container.querySelector(`line[data-vendor="${id}"]`)
@@ -56,7 +57,7 @@ describe('RankingFlip', () => {
       expect(line).not.toHaveAttribute('stroke-dasharray')
     }
     // Nordwerk moves up (3rd → 1st); only a worsening is labelled.
-    expect(screen.queryByText('3rd → 1st')).toBeNull()
+    expect(screen.queryByText(copy.brief.ranking.change({ from: '3rd', to: '1st' }))).toBeNull()
   })
 
   it('keeps the drawing out of the accessibility tree', () => {
@@ -219,7 +220,7 @@ describe('RankingFlip: the flip (play)', () => {
     expect(shown(deltaLabel)).toBe(true)
     expect(shown(voltLabel)).toBe(true)
     expect(within(voltLabel).getByText('€479,650')).toBeInTheDocument()
-    const mark = within(voltLabel).getByText('1st → 3rd')
+    const mark = within(voltLabel).getByText(copy.brief.ranking.change({ from: '1st', to: '3rd' }))
     expect(shown(mark)).toBe(false)
 
     // 1650 ms: the fall is marked.

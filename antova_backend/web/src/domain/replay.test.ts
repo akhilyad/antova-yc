@@ -51,7 +51,11 @@ describe('buildReplay', () => {
       '4 documents, 116 pages, 12 drawing sheets',
       '36 quotes located',
       '36 of 36 found word for word',
-      'Deltaport Skid Consortium B.V.: 104 °F → 40 °C',
+      copy.modal.findings.conversion({
+        vendor: 'Deltaport Skid Consortium B.V.',
+        from: '104 °F',
+        to: '40 °C',
+      }),
       expect.any(String),
       '10 gaps priced. VoltSwitch Industrial +€64,800.',
     ])
@@ -223,8 +227,14 @@ describe('findings', () => {
     const cell = ambient?.vendors['vendor-c']
     if (!cell) throw new Error('fixture changed')
     cell.checks = []
-    // Nordwerk's "2.5 kA → 2500 A" comes before VoltSwitch's "36000 V → 36 kV".
-    expect(finding(brief, 'values')).toBe('Nordwerk Schaltanlagen GmbH: 2.5 kA → 2500 A')
+    // Nordwerk's "2.5 kA to 2500 A" comes before VoltSwitch's "36000 V to 36 kV".
+    expect(finding(brief, 'values')).toBe(
+      copy.modal.findings.conversion({
+        vendor: 'Nordwerk Schaltanlagen GmbH',
+        from: '2.5 kA',
+        to: '2500 A',
+      }),
+    )
   })
 
   it('shows "values read" alone when nothing was converted', () => {
@@ -244,7 +254,13 @@ describe('findings', () => {
     if (!check) throw new Error('fixture changed')
     check.offered = 'hot'
     check.offered_canonical = 'HOT'
-    expect(finding(brief, 'values')).toBe('Deltaport Skid Consortium B.V.: hot → HOT')
+    expect(finding(brief, 'values')).toBe(
+      copy.modal.findings.conversion({
+        vendor: 'Deltaport Skid Consortium B.V.',
+        from: 'hot',
+        to: 'HOT',
+      }),
+    )
   })
 
   it('keeps acronym section names in capitals', () => {

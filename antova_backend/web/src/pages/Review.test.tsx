@@ -455,7 +455,7 @@ describe('Review: brief', () => {
         },
       ]),
     )
-    expect(await within(margin()).findByText(`Overridden: ${NOTE}`)).toBeInTheDocument()
+    expect(await within(margin()).findByText(copy.review.override.badge(NOTE))).toBeInTheDocument()
     // The totals are the new brief's, not the prices settled before the override.
     await waitFor(() => expect(levelingRow(/Deltaport/)).toHaveTextContent('€454,000'))
     expect(
@@ -476,7 +476,7 @@ describe('Review: brief', () => {
     await user.click(within(margin()).getByRole('button', { name: copy.review.override.remove }))
     await waitFor(() => expect(state.calls.del).toBe(1))
     await waitFor(() => expect(levelingRow(/Deltaport/)).toHaveTextContent('€451,400'))
-    expect(within(margin()).queryByText(`Overridden: ${NOTE}`)).toBeNull()
+    expect(within(margin()).queryByText(copy.review.override.badge(NOTE))).toBeNull()
   })
 
   it('Mark verified is aria-disabled, focusable, and describes the open items until they are resolved', async () => {
@@ -901,7 +901,7 @@ describe('Review: re-ingesting a brief (F2)', () => {
       name: copy.review.reingestConfirm.title(OTHER_ID),
     })
     expect(confirm).toHaveTextContent('share link stops working')
-    expect(confirm).toHaveTextContent('2 overrides on this brief')
+    expect(confirm).toHaveTextContent('2 edited amounts on this brief')
     expect(started).toEqual([])
   })
 
@@ -954,7 +954,7 @@ describe('Review: re-ingesting a brief (F2)', () => {
       copy.review.reingestConfirm.body({ verified: true, overrides: 1 }),
     )
     expect(confirm).toHaveTextContent('share link stops working')
-    expect(confirm).toHaveTextContent('1 override on this brief')
+    expect(confirm).toHaveTextContent('1 edited amount on this brief')
     await user.click(
       within(confirm).getByRole('button', { name: copy.review.reingestConfirm.cancel }),
     )
@@ -982,7 +982,7 @@ describe('Review: re-ingesting a brief (F2)', () => {
     const confirm = await screen.findByRole('dialog', {
       name: copy.review.reingestConfirm.title(TENDER_ID),
     })
-    expect(confirm).toHaveTextContent('1 override on this brief')
+    expect(confirm).toHaveTextContent('1 edited amount on this brief')
     expect(confirm).not.toHaveTextContent('share link')
   })
 
@@ -1015,7 +1015,7 @@ describe('Review: re-ingesting a brief (F2)', () => {
     await user.click(within(modal).getByRole('button', { name: copy.modal.openBrief }))
 
     await saveOverride(user, '2600')
-    expect(await within(margin()).findByText(`Overridden: ${NOTE}`)).toBeInTheDocument()
+    expect(await within(margin()).findByText(copy.review.override.badge(NOTE))).toBeInTheDocument()
     expect(screen.queryByText(copy.review.reingested)).toBeNull()
     expect(screen.queryByText(CLEARED)).toBeNull()
   })
