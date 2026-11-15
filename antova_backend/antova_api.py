@@ -58,12 +58,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+configured_origins = [o.strip() for o in os.environ.get("ANTOVA_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if not configured_origins:
+    configured_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://antova-backend-demo.vercel.app"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.environ.get("ANTOVA_ALLOWED_ORIGINS", "").split(",") if o.strip()],
+    allow_origins=configured_origins,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Content-Type", REVIEW_HEADER],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["x-antova-source", REVIEW_HEADER],
 )
 
 app.include_router(briefs_router)
