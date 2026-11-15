@@ -47,8 +47,10 @@ const BACKEND_STAGES = new Map<string, StageKey>([
   ['Parse', 'read'],
   ['Locate', 'find'],
   ['Verify citations', 'verify'],
+  ['Check each quote is on its page', 'verify'],
   ['Read values', 'values'],
   ['Resolve precedence', 'contradictions'],
+  ['Check where documents disagree', 'contradictions'],
   ['Price', 'price'],
   ['Persist', 'price'],
 ])
@@ -107,8 +109,9 @@ function conversionText(vendor: Vendor, check: Check): string {
   })
 }
 
-/** The backend's conflict note: "Cover letter p.2 claims X; Drawing p.11 states Y. Drawing governs." */
-const CONFLICT_NOTE = /^(.+?) p\.(\d+) claims (.+); (.+?) p\.(\d+) states (.+)\. \4 governs\.$/
+/** The backend's conflict note: "Cover letter p.2 says X. Drawing p.11 says Y. The Drawing takes priority." */
+const CONFLICT_NOTE =
+  /^(.+?) p\.(\d+) (?:claims|says) (.+?)[;.]\s*(.+?) p\.(\d+) (?:states|says) (.+?)\.\s*(?:The\s+)?\4\s*(?:governs|takes priority)\.$/
 
 /** "Cover letter" → "cover letter"; an acronym such as "BOM" keeps its capitals. */
 function sectionName(label: string): string {

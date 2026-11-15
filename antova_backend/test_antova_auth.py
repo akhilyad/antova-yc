@@ -25,14 +25,14 @@ def client():
 def test_route_requires_token(client, method, path):
     response = client.request(method, path)
     assert response.status_code == 401
-    assert response.json() == {"detail": "Invalid review token"}
+    assert response.json() == {"detail": "That review token didn't work."}
 
 
 @pytest.mark.parametrize("method,path", GATED_ROUTES)
 def test_route_rejects_wrong_token(client, method, path):
     response = client.request(method, path, headers={REVIEW_HEADER: "not-the-token"})
     assert response.status_code == 401
-    assert response.json() == {"detail": "Invalid review token"}
+    assert response.json() == {"detail": "That review token didn't work."}
 
 
 @pytest.mark.parametrize("method,path", GATED_ROUTES)
@@ -46,7 +46,7 @@ def test_unset_server_token_is_503(client, monkeypatch, method, path):
     monkeypatch.setenv("ANTOVA_REVIEW_TOKEN", "")
     response = client.request(method, path, headers={REVIEW_HEADER: TOKEN})
     assert response.status_code == 503
-    assert response.json() == {"detail": "Review is not configured on this server"}
+    assert response.json() == {"detail": "Review is not set up on this server."}
 
 
 def test_absent_server_token_is_503(client, monkeypatch):

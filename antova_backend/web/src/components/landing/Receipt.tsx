@@ -47,12 +47,11 @@ export function Receipt({ briefHref }: ReceiptProps) {
             <div className={styles.boxBody}>
               <div className={styles.priceRow}>
                 <span className={styles.pricePromised}>{s.box1.price}</span>
-                <span className={styles.apparentBadge}>(Apparent Lowest Bid)</span>
+                <span className={styles.apparentBadge}>(Lowest base bid)</span>
               </div>
-              <blockquote className={styles.boxQuote}>&ldquo;{s.box1.text}&rdquo;</blockquote>
+              <blockquote className={styles.boxQuote}>"{s.box1.text}"</blockquote>
               <p className={styles.boxExplanation}>
-                The quote on page one looks like a winner. It seems like the lowest price in the
-                room.
+                Page one shows the lowest price of all the bids.
               </p>
             </div>
           </div>
@@ -72,10 +71,9 @@ export function Receipt({ briefHref }: ReceiptProps) {
               <div className={styles.priceRow}>
                 <span className={styles.priceHidden}>{s.box2.addedCost}</span>
               </div>
-              <blockquote className={styles.boxQuote}>&ldquo;{s.box2.text}&rdquo;</blockquote>
+              <blockquote className={styles.boxQuote}>"{s.box2.text}"</blockquote>
               <p className={styles.boxExplanation}>
-                Deep in page 48, setup, testing, and basic warranty are quietly left out of the
-                deal.
+                Page 48 excludes setup, testing and basic warranty.
               </p>
             </div>
           </div>

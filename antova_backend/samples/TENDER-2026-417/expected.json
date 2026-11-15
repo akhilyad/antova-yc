@@ -413,28 +413,28 @@
     "vendor-a": {
       "name": "Kestrel Switchgear AG",
       "headline_price": "388000.00",
-      "badge": "Lowest Evaluated Price",
+      "badge": "Lowest evaluated total",
       "total_adders": "0.00",
       "true_evaluated_price": "388000.00"
     },
     "vendor-b": {
       "name": "Orbis Elektrik A.S.",
       "headline_price": null,
-      "badge": "Price not found",
+      "badge": "Bid price not found",
       "total_adders": "0.00",
       "true_evaluated_price": null
     },
     "vendor-c": {
       "name": "Tavish Power Systems Ltd",
       "headline_price": null,
-      "badge": "Price not found",
+      "badge": "Bid price not found",
       "total_adders": "0.00",
       "true_evaluated_price": null
     },
     "vendor-d": {
       "name": "Lindqvist Energi AB",
       "headline_price": "372500.00",
-      "badge": "Apparent Low Bidder",
+      "badge": "Lowest base bid",
       "total_adders": "13050.00",
       "true_evaluated_price": "385550.00",
       "price_status": "UNPRICED_ITEMS"

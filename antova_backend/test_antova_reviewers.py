@@ -149,7 +149,7 @@ def test_a_broken_reviewer_config_leaves_review_closed(monkeypatch, value):
         _configured()
     response = _as(SHARED).get("/api/review/tenders")
     assert response.status_code == 503
-    assert response.json() == {"detail": "Review is not configured on this server"}
+    assert response.json() == {"detail": "Review is not set up on this server."}
 
 
 def test_a_reviewer_without_a_name_is_named_by_id(monkeypatch):

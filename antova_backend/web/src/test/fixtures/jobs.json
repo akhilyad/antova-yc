@@ -23,10 +23,10 @@
         "MR-33kV-GIS-Rev4.pdf": "unknown"
       },
       "negotiating_vendor": {
-        "basis": "lowest true evaluated price",
+        "basis": "lowest evaluated total",
         "excluded": [
           {
-            "detail": "has deviations with no rate (PARAM-06), so its price is only a lower bound",
+            "detail": "has gaps with no price (PARAM-06), so its evaluated total is a minimum",
             "reason": "UNPRICED_ITEMS",
             "vendor_id": "vendor-b"
           }
@@ -68,7 +68,7 @@
         },
         {
           "pct": 70,
-          "stage": "Verify citations",
+          "stage": "Check each quote is on its page",
           "t_ms": 41390
         },
         {
@@ -78,7 +78,7 @@
         },
         {
           "pct": 85,
-          "stage": "Resolve precedence",
+          "stage": "Check where documents disagree",
           "t_ms": 41580
         },
         {
@@ -154,7 +154,7 @@
       "job_id": "job-e2e00001",
       "progress_pct": 70,
       "result": null,
-      "stage": "Verify citations",
+      "stage": "Check each quote is on its page",
       "status": "PROCESSING"
     },
     {
@@ -174,7 +174,7 @@
       "job_id": "job-e2e00001",
       "progress_pct": 85,
       "result": null,
-      "stage": "Resolve precedence",
+      "stage": "Check where documents disagree",
       "status": "PROCESSING"
     },
     {

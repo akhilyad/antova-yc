@@ -110,7 +110,7 @@ def test_a_blocker_that_appears_after_the_first_check_is_caught_and_rolled_back(
     monkeypatch.setattr(TenderRepository, "claim_verification", delete_override_then_claim)
     response = client.post(f"{REVIEW}/verify", json={"run_id": _run_id(client)})
     assert response.status_code == 409
-    assert response.json()["detail"] == "Open items remain"
+    assert response.json()["detail"] == "Resolve the open items before you sign off."
     assert [(i["kind"], i["param_id"]) for i in response.json()["open_items"]] == [("unpriced", "PARAM-06")]
     meta = _meta()
     assert (meta.status, meta.verified_by) == ("DRAFT", None)  # the claim was rolled back

@@ -164,7 +164,7 @@ def test_a_verified_brief_freezes_its_documents(client, root, ingested_402):
         TenderRepository(db).set_status("TENDER-2026-402", "VERIFIED", datetime.now(timezone.utc), by="t")
         try:
             response = client.put(_url(SMALL, "TENDER-2026-402"), content=_pdf(), headers=PDF)
-            assert response.status_code == 409 and "Withdraw" in response.json()["detail"]
+            assert response.status_code == 409 and "Reopen the brief" in response.json()["detail"]
             assert client.put("/api/review/tenders/TENDER-2026-402/manifest",
                               content=json.dumps(_manifest("TENDER-2026-402"))).status_code == 409
         finally:

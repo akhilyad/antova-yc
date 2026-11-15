@@ -73,12 +73,12 @@ def require_review_token(x_antova_review_token: str | None = Header(default=None
         log.error("%s", exc)
         pairs = []
     if not pairs:
-        raise HTTPException(status_code=503, detail="Review is not configured on this server")
+        raise HTTPException(status_code=503, detail="Review is not set up on this server.")
     given = (x_antova_review_token or "").strip().encode("utf-8")
     match = None
     for token, principal in pairs:  # every token is compared, so timing does not reveal which one is close
         if hmac.compare_digest(given, token.encode("utf-8")) and given:
             match = principal
     if match is None:
-        raise HTTPException(status_code=401, detail="Invalid review token")
+        raise HTTPException(status_code=401, detail="That review token didn't work.")
     return match

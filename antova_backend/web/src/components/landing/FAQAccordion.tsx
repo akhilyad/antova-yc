@@ -38,7 +38,7 @@ export const FAQAccordion: React.FC<FAQAccordionProps> = ({
     <section aria-labelledby={`${baseId}-heading`} className={`${styles.container} ${className}`}>
       <div className={styles.header}>
         <div className={styles.sectionBadge} aria-hidden="true">
-          <span>● FREQUENTLY ASKED QUESTIONS</span>
+          <span>Questions and answers</span>
         </div>
         <h2 id={`${baseId}-heading`} className={styles.title}>
           {copy.landing.faqHeading}

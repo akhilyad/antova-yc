@@ -27,7 +27,7 @@
   ],
   "financials": [
     {
-      "badge": "Lowest Evaluated Price",
+      "badge": "Lowest evaluated total",
       "clawed_back_amount": 0.0,
       "country": "Germany",
       "currency": "EUR",
@@ -151,7 +151,7 @@
       "vendor_id": "vendor-a"
     },
     {
-      "badge": "Apparent Low Bidder",
+      "badge": "Lowest base bid",
       "clawed_back_amount": 0.0,
       "country": "Turkey / EU",
       "currency": "EUR",
@@ -418,10 +418,10 @@
       "MR-33kV-GIS-Rev4.pdf": "unknown"
     },
     "negotiating_vendor": {
-      "basis": "lowest true evaluated price",
+      "basis": "lowest evaluated total",
       "excluded": [
         {
-          "detail": "has deviations with no rate (PARAM-06), so its price is only a lower bound",
+          "detail": "has gaps with no price (PARAM-06), so its evaluated total is a minimum",
           "reason": "UNPRICED_ITEMS",
           "vendor_id": "vendor-b"
         }
@@ -456,7 +456,7 @@
   "open_items": [
     {
       "kind": "unpriced",
-      "message": "Gap found but not priced",
+      "message": "Gap has no price yet. Enter an amount or accept it.",
       "param_id": "PARAM-05",
       "vendor_id": "vendor-c"
     }
@@ -495,7 +495,7 @@
     },
     {
       "pct": 70,
-      "stage": "Verify citations",
+      "stage": "Check each quote is on its page",
       "t_ms": 41390
     },
     {
@@ -505,7 +505,7 @@
     },
     {
       "pct": 85,
-      "stage": "Resolve precedence",
+      "stage": "Check where documents disagree",
       "t_ms": 41580
     },
     {
@@ -793,7 +793,7 @@
               "section": "drawing"
             },
             "confidence": 0.9,
-            "conflict_note": "Cover letter p.2 claims 50 kA / 3 s; Drawing p.11 states 31.5 kA / 1 s. Drawing governs.",
+            "conflict_note": "Cover letter p.2 says 50 kA / 3 s. Drawing p.11 says 31.5 kA / 1 s. The Drawing takes priority.",
             "cost_adder": 18500.0,
             "cost_lines": [
               {
@@ -2627,7 +2627,7 @@
               "section": "bom"
             },
             "confidence": 0.9,
-            "conflict_note": "Compliance table p.3 claims IEC 61850 Ed. 2 with PRP; BOM p.15 states not IEC 61850. BOM governs.",
+            "conflict_note": "Compliance table p.3 says IEC 61850 Ed. 2 with PRP. BOM p.15 says not IEC 61850. The BOM takes priority.",
             "cost_adder": 7400.0,
             "cost_lines": [
               {
@@ -3752,7 +3752,7 @@
             "flags": [
               {
                 "code": "WARRANTY_BASIS",
-                "message": "warranty 18 months runs from dispatch; the MR requires 36 months from commissioning. The MR states no duration between the two, so the shortfall cannot be computed and is left unpriced"
+                "message": "Warranty is 18 months from dispatch. The spec requires 36 months from commissioning. The spec doesn't say how long dispatch to commissioning takes, so the shortfall has no price yet."
               }
             ],
             "pricing_status": "UNPRICED",
@@ -4734,7 +4734,7 @@
     "title": "350 MWp Solar + BESS Substation — 33kV GIS Switchgear & RTU Protection Package",
     "vendors": [
       {
-        "badge": "Lowest Evaluated Price",
+        "badge": "Lowest evaluated total",
         "country": "Germany",
         "cover_claim": "Our offer is in full compliance with MR-33kV-GIS-Rev4 except minor commercial notes.",
         "currency": "EUR",
@@ -4770,7 +4770,7 @@
         "name": "Nordwerk Schaltanlagen GmbH"
       },
       {
-        "badge": "Apparent Low Bidder",
+        "badge": "Lowest base bid",
         "country": "Turkey / EU",
         "cover_claim": "We confirm our offer is 100% compliant with Material Requisition MR-33kV-GIS-Rev4.",
         "currency": "EUR",

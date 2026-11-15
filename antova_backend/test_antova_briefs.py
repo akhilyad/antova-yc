@@ -73,8 +73,8 @@ def _seed_unpriced(ingested, param_id="PARAM-03", vendor_id="vendor-c"):
 WARRANTY_OVERRIDE = {"param_id": "PARAM-06", "vendor_id": "vendor-b", "adder_eur": "9300.00",
                      "note": "priced by the founder: freight 6,150 plus 18 months x EUR 175"}
 WARRANTY_OPEN_ITEMS = [  # what the unreviewed sample blocks verification with, before any other cell is touched
-    {"kind": "review_flag", "vendor_id": "vendor-b", "param_id": "PARAM-06", "message": "Review flag not approved yet"},
-    {"kind": "unpriced", "vendor_id": "vendor-b", "param_id": "PARAM-06", "message": "Gap found but not priced"},
+    {"kind": "review_flag", "vendor_id": "vendor-b", "param_id": "PARAM-06", "message": "Flag not reviewed yet."},
+    {"kind": "unpriced", "vendor_id": "vendor-b", "param_id": "PARAM-06", "message": "Gap has no price yet. Enter an amount or accept it."},
 ]
 
 
@@ -277,9 +277,9 @@ def test_verify_blocked_by_open_items(public, review, ingested, share_id):
     _seed_unpriced(ingested)
     blocked = review.post(f"{REVIEW}/verify")
     assert blocked.status_code == 409
-    assert blocked.json() == {"detail": "Open items remain", "open_items": [
+    assert blocked.json() == {"detail": "Resolve the open items before you sign off.", "open_items": [
         *WARRANTY_OPEN_ITEMS,
-        {"kind": "unpriced", "vendor_id": "vendor-c", "param_id": "PARAM-03", "message": "Gap found but not priced"}]}
+        {"kind": "unpriced", "vendor_id": "vendor-c", "param_id": "PARAM-03", "message": "Gap has no price yet. Enter an amount or accept it."}]}
     assert public.get(f"/api/briefs/{share_id}").status_code == 404
     assert _override(review, "PARAM-03", "vendor-c", "3000", "engineer's estimate").status_code == 204
     still = review.post(f"{REVIEW}/verify")  # priced, but the warranty flag is not approved and its gap is not priced
@@ -303,7 +303,7 @@ def test_withdraw_hides_brief(public, review, share_id):
 
 
 def test_override_change_on_verified_brief_is_409(public, review, share_id, monkeypatch):
-    locked = {"detail": "Withdraw the brief before changing overrides"}
+    locked = {"detail": "Reopen the brief before you edit amounts."}
     _resolve_warranty(review)
     path = f"{REVIEW}/overrides/PARAM-01/vendor-b"
     assert _override(review, "PARAM-01", "vendor-b", "0", "waived").status_code == 204

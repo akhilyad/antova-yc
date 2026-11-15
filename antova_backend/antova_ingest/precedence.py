@@ -92,9 +92,9 @@ def _warranty_check(result: CheckResult, required: FieldValue, offered: FieldVal
     result.comparable = False
     result.passed = False
     add_flag(flags, "WARRANTY_BASIS",
-             f"warranty {offered.display} months runs from {offered_basis}; the MR requires {required.display} months "
-             f"from {required_basis}. The MR states no duration between the two, so the shortfall cannot be "
-             f"computed and is left unpriced")
+             f"Warranty is {offered.display} months from {offered_basis}. The spec requires {required.display} months "
+             f"from {required_basis}. The spec doesn't say how long {offered_basis} to {required_basis} takes, "
+             f"so the shortfall has no price yet.")
 
 
 def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: list[Evidence],
@@ -118,9 +118,8 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         if not usable:
             for e in unused:
                 add_flag(flags, "SWEEP_NOT_USED",
-                         f"possible evidence on p.{e.citation.page} not reviewed: the recall sweep read "
-                         f"{f.label} {e.values[f.name].display} in the {SECTION_LABELS[e.citation.section].lower()}, "
-                         f"but the locator did not cite it")
+                         f"Page {e.citation.page} may also mention {f.label} {e.values[f.name].display} "
+                         f"({SECTION_LABELS[e.citation.section].lower()}). Check it.")
             continue
         best = min(_tier(e) for e in usable)
         top = [e for e in usable if _tier(e) == best]
@@ -137,15 +136,14 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         if chosen.source == "sweep":
             sweep_governed.add(f.name)
             add_flag(flags, "SWEEP_GOVERNS",
-                     f"{_where(chosen.citation)} was found by the recall sweep, not by the locator; "
-                     f"check the passage before relying on it")
+                     f"{_where(chosen.citation)} was found in a second pass. "
+                     f"Check the page before you rely on it.")
         elif required and not _passes(f, requirement, chosen):
             for e in unused:
                 if _tier(e) < best:
                     add_flag(flags, "SWEEP_STRONGER_PASSING",
-                             f"possible evidence on p.{e.citation.page} not reviewed: the recall sweep read "
-                             f"{f.label} {e.values[f.name].display} in stronger evidence "
-                             f"({_where(e.citation)}) than the governing passage")
+                             f"Page {e.citation.page} may also mention {f.label} {e.values[f.name].display} "
+                             f"({_where(e.citation)}). Check it.")
 
     checks: list[CheckResult] = []
     failing_fields: list[FieldDef] = []
@@ -245,5 +243,5 @@ def _conflict_note(param: ParameterDef, claim: Evidence, governing: dict[str, tu
     stated = " / ".join(governing[n][0].display for n in names)
     sec_label = SECTION_LABELS[claim.citation.section]
     pri_label = SECTION_LABELS[primary.section]
-    return (f"{sec_label} p.{claim.citation.page} claims {claimed}; "
-            f"{pri_label} p.{primary.page} states {stated}. {pri_label} governs.")
+    return (f"{sec_label} p.{claim.citation.page} says {claimed}. "
+            f"{pri_label} p.{primary.page} says {stated}. The {pri_label} takes priority.")

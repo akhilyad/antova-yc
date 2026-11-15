@@ -37,13 +37,13 @@ const faq: readonly FaqItem[] = [
     id: 'save-money',
     question: 'How does this save us money?',
     answer:
-      'Vendors often win deals with low bids, then charge huge extra fees for things they left out. Antova finds those missing pieces before you sign, so you do not pay surprise bills later.',
+      'Low bids often leave out scope, and the vendor charges for it later. Antova finds the missing scope before you sign.',
   },
   {
     id: 'different-chatgpt',
     question: 'How is this different from tools like ChatGPT?',
     answer:
-      'Regular AI guesses and makes mistakes. Antova does not guess. It checks real numbers line by line, calculates exact costs, and clicks straight to the exact page where the vendor hid the note.',
+      'AI chat tools can make up numbers. In Antova, AI only finds the quotes. Code checks units and does every sum, and each quote links to its page.',
   },
   {
     id: 'files-upload',
@@ -107,7 +107,7 @@ export const copy = {
 
   landing: {
     /** The landing page's document title. */
-    title: 'Antova: The lowest bid is almost never the cheapest.',
+    title: 'Antova: The lowest bid is often not the lowest cost.',
     /** The search-result and link-preview description (meta description, og:description). */
     description:
       'Vendors quote low prices, then hide extra costs in the fine print. Antova reads every page, finds what they left out, and shows you the true cost before you sign.',
@@ -115,41 +115,41 @@ export const copy = {
     nav: {
       howItWorks: 'How it works',
       sampleBrief: 'See sample check',
-      recheck: 'Get Early Access',
+      recheck: 'Get early access',
     },
     /** Above the h1: Small Header Tag */
-    eyebrow: 'SMART BID CHECKER',
-    h1: 'The lowest bid is almost never the cheapest.',
+    eyebrow: 'Bid checker',
+    h1: 'The lowest bid is often not the lowest cost.',
     lede: 'Vendors quote low prices, then hide extra costs in the fine print. Antova reads every page, finds what they left out, and shows you the true cost before you sign.',
     /** Core benefit: */
     tagline: 'Catch missing costs before you sign, not after work starts.',
-    watchButton: 'Watch 1-Minute Walkthrough',
-    primaryCta: 'See Sample Check',
-    secondaryCta: 'Get Early Access',
-    uploadTenderCta: 'Upload Files to Check',
-    recheckButton: 'Get Early Access',
+    watchButton: 'Watch the 1-minute walkthrough',
+    primaryCta: 'See a sample check',
+    secondaryCta: 'Get early access',
+    uploadTenderCta: 'Upload files to check',
+    recheckButton: 'Get early access',
     recheckTerms: 'Done in minutes. Direct link to every page. Your data stays private.',
-    sampleLink: 'See Sample Check',
-    sampleLabel: 'Sample Check: Equipment & Contractor Bids',
-    trustBadges: ['Done in Minutes', 'Direct Link to Every Page', 'Your Data Stays Private'],
+    sampleLink: 'See a sample check',
+    sampleLabel: 'Sample check: equipment and contractor bids',
+    trustBadges: ['Done in minutes', 'A link to every page', 'Your data stays private'],
     sideBySide: {
-      tag: 'THE REAL PROOF',
+      tag: 'The proof',
       heading: 'How buyers get tricked by low bids',
       subheading: 'A vendor looks like the cheapest choice on page one. Then you read page 48.',
       box1: {
-        label: 'PAGE 1 · PROMISED PRICE',
+        label: 'Page 1: quoted price',
         text: 'Full system supply and delivery.',
         price: '$1,200,000',
         note: 'Looks like the winning bid',
       },
       box2: {
-        label: 'PAGE 48 · HIDDEN NOTES',
+        label: 'Page 48: the exclusions',
         text: 'Does not include setup, testing, or basic warranty.',
-        addedCost: '+$185,000 in surprise bills later',
-        note: 'Hidden deep in the fine print',
+        addedCost: '+$185,000 not in the quote',
+        note: 'On page 48',
       },
       resultBar: {
-        label: 'REAL TOTAL COST: $1,385,000',
+        label: 'Evaluated total: $1,385,000',
         tag: 'Rank drops from 1st to 3rd',
         takeaway: 'Catch missing costs before you sign, not after work starts.',
       },
@@ -168,23 +168,23 @@ export const copy = {
     evidence: {
       superseded: 'Page 1 says full supply and delivery for $1,200,000.',
       governing: 'Page 48 notes say no setup, testing, or basic warranty.',
-      outcome: (adder: string) => `Hidden notes add ${adder} in surprise bills later.`,
+      outcome: (adder: string) => `The exclusions add ${adder} to the real cost.`,
       link: (n: number) => `See note ${n} in sample check`,
     },
     howItWorks: {
-      heading: 'How It Works',
+      heading: 'How it works',
       subheading: 'Three simple steps to check every vendor bid before you sign.',
       steps: [
         {
-          title: '01 / Upload Your Files',
+          title: '1. Upload your files',
           body: 'Drop in what you asked to buy and the bids you received (PDFs, Word documents, or spreadsheets).',
         },
         {
-          title: '02 / Instant Check',
+          title: '2. Instant check',
           body: 'Antova reads every line in minutes to catch missing work, hidden rules, and missed requirements.',
         },
         {
-          title: '03 / See the Real Price',
+          title: '3. See the real price',
           body: 'Get a side-by-side view showing the true cost for each vendor, with links directly to the proof.',
         },
       ],
@@ -221,7 +221,7 @@ export const copy = {
     offer: {
       heading: 'Stop paying surprise bills on big contracts.',
       body: 'Send us what you want to buy and the bids you received. We will run a sample check and show you who is actually cheapest before you sign.',
-      button: 'Get Early Access',
+      button: 'Get early access',
       orWriteTo: (address: string) => `Or email ${address}`,
       whatToSendHeading: 'What to send',
       whatToSend: [
@@ -294,7 +294,7 @@ export const copy = {
       'Finding the evidence',
       'Checking each quote is on its page',
       'Reading the values',
-      'Settling contradictions',
+      'Checking where documents disagree',
       'Pricing the gaps',
     ],
     /** Each stage's finding (spec §7.2), in stage order. Counts pluralize by n (R12). */
@@ -305,7 +305,7 @@ export const copy = {
       verify: ({ found, total }: { found: number; total: number }) =>
         `${found} of ${total} found word for word`,
       conversion: ({ vendor, from, to }: { vendor: string; from: string; to: string }) =>
-        `${vendor}: ${from} → ${to}`,
+        `${vendor}: ${from} to ${to}`,
       valuesRead: 'Values read',
       contradiction: ({
         vendor,
@@ -470,8 +470,8 @@ export const copy = {
         const suffix = ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'
         return `${n}${suffix}`
       },
-      /** The visible label on a worsened line: "1st → 3rd". */
-      change: ({ from, to }: { from: string; to: string }) => `${from} → ${to}`,
+      /** The visible label on a worsened line: "1st to 3rd". */
+      change: ({ from, to }: { from: string; to: string }) => `${from} to ${to}`,
       /** The text alternative's wording of the same change, after the evaluated-order entry. */
       changeSpoken: (from: string) => `down from ${from} on bid price`,
       item: ({ name, price }: { name: string; price: string }) => `${name}, ${price}`,
@@ -623,12 +623,12 @@ export const copy = {
       empty: 'Paste the review token first.',
     },
     notConfigured: 'Review is not configured on this server.',
-    reingested: 'Ingested again. This brief is back to draft.',
+    reingested: 'Processed again. This brief is back to draft.',
     /** Under the re-ingested banner, before the overrides the re-ingest cleared. */
     reingestedCleared: (n: number) =>
       n === 1
-        ? 'The evidence for this override changed, so the new ingest cleared it. Enter it again if it still applies:'
-        : `The evidence for these ${n} overrides changed, so the new ingest cleared them. Enter them again if they still apply:`,
+        ? 'The source page for this edited amount changed, so the new run removed the edit. Enter it again if it still applies:'
+        : `The source page for these ${n} edited amounts changed, so the new run removed them. Enter them again if they still apply:`,
     /** One cleared override: "VoltSwitch Industrial, Main Busbar …: +€10,000 (note)". */
     clearedOverride: ({
       vendor,
@@ -647,22 +647,22 @@ export const copy = {
      * being re-ingested, which need not be the brief on screen.
      */
     reingestConfirm: {
-      title: (tenderId: string) => `Ingest ${tenderId} again?`,
+      title: (tenderId: string) => `Process ${tenderId} again?`,
       /** The brief couldn't be looked up, so what re-ingesting loses is unknown. */
       unknownBody:
-        "We couldn't check this tender. If its brief is verified or has overrides, ingesting it again takes it back to draft and clears any override whose evidence has changed.",
+        "We couldn't check this tender. If its brief is verified or has overrides, processing it again takes it back to draft and removes any edited amount whose source page changed.",
       body: ({ verified, overrides }: { verified: boolean; overrides: number }) =>
         [
           verified
             ? 'The brief goes back to draft, and the share link stops working until you verify it again.'
             : null,
           overrides > 0
-            ? `${count(overrides, 'override', 'overrides')} on this brief: each stays only if the evidence it rests on is unchanged. Any that change are cleared and listed afterwards so you can enter them again.`
+            ? `${count(overrides, 'edited amount', 'edited amounts')} on this brief: each stays only if its source page is unchanged. Any that change are removed and listed afterwards so you can enter them again.`
             : null,
         ]
           .filter((sentence) => sentence !== null)
           .join(' '),
-      confirm: 'Ingest again',
+      confirm: 'Process again',
       cancel: 'Cancel',
     },
     signOut: 'Sign out of review',
@@ -686,21 +686,21 @@ export const copy = {
     }) =>
       requirement === null ? `${vendor}: ${message}` : `${vendor}, ${requirement}: ${message}`,
     override: {
-      heading: 'Override',
-      label: 'Override adder (€)',
+      heading: 'Edit cost adjustment',
+      label: 'New cost adjustment (€)',
       why: 'Why',
-      whyPlaceholder: "e.g. engineer's estimate after vendor clarification",
-      save: 'Save override',
-      remove: 'Remove override',
-      badge: (note: string) => `Overridden: ${note}`,
+      whyPlaceholder: "Example: engineer's estimate after the vendor clarified",
+      save: 'Save amount',
+      remove: 'Use calculated amount',
+      badge: (note: string) => `Amount edited: ${note}`,
       amountError: 'Use digits only, e.g. 18500 or 18500.50',
-      noteError: "Say why you're overriding this adder.",
+      noteError: 'Add a reason for the new amount.',
       /** Ruling R10: overrides are locked while the brief is verified (the backend's 409). */
-      locked: 'Withdraw the brief before changing overrides',
-      saved: 'Override saved.',
-      removed: 'Override removed.',
-      saveFailed: "Couldn't save the override. Try again.",
-      removeFailed: "Couldn't remove the override. Try again.",
+      locked: 'Reopen the brief before you edit amounts.',
+      saved: 'Amount saved.',
+      removed: 'Calculated amount restored.',
+      saveFailed: "Couldn't save the amount. Try again.",
+      removeFailed: "Couldn't restore the amount. Try again.",
     },
     verify: {
       button: 'Mark verified',
@@ -741,7 +741,7 @@ export const copy = {
         title: 'Title',
         status: 'Status',
         openItems: 'Open items',
-        ingested: 'Ingested',
+        ingested: 'Processed',
         verified: 'Verified',
       },
       status: { DRAFT: 'Draft', VERIFIED: 'Verified' },
@@ -751,7 +751,7 @@ export const copy = {
       loading: 'Loading tenders',
     },
     ingest: {
-      heading: 'Run ingest',
+      heading: 'Process a tender',
       folderLabel: 'Tender folder ID',
       folderHelp: 'Capital letters, digits and hyphens, e.g. PROJECT-2026-01.',
       folderError: 'Use capital letters, digits and hyphens only, e.g. PROJECT-2026-01.',
@@ -761,16 +761,16 @@ export const copy = {
         replay: 'Replay: recorded answers only',
         live: 'Live: ask the model again',
       },
-      submit: 'Run ingest',
+      submit: 'Process a tender',
       checking: 'Checking the tender…',
-      startFailed: "Couldn't start the ingest. Try again.",
+      startFailed: "Couldn't start processing. Try again.",
     },
     /**
      * "No tenders yet. Ingest one with `python -m antova_ingest.run <folder>` or *Run ingest*."
      * Split so the page can render the command as <code> and "Run ingest" as the action.
      */
     indexEmpty: {
-      lead: 'No tenders yet. Ingest one with ',
+      lead: 'No tenders yet. Process one with ',
       command: 'python -m antova_ingest.run <folder>',
       or: ' or ',
       action: 'Run ingest',

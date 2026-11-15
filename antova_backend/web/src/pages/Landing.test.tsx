@@ -260,14 +260,14 @@ describe('Landing', () => {
     const user = userEvent.setup()
     renderLanding()
     const faq = screen.getByRole('region', { name: copy.landing.faqHeading })
-    expect(within(faq).getByText(/FREQUENTLY ASKED QUESTIONS/i)).toBeInTheDocument()
+    expect(within(faq).getByText(/Questions and answers/i)).toBeInTheDocument()
     const buttons = within(faq).getAllByRole('button')
     expect(buttons).toHaveLength(4)
 
     // First question is open by default
     expect(buttons[0]).toHaveAttribute('aria-expanded', 'true')
     expect(
-      within(faq).getByText(/Vendors often win deals with low bids, then charge huge extra fees/i),
+      within(faq).getByText(/Low bids often leave out scope, and the vendor charges for it later/i),
     ).toBeInTheDocument()
 
     // Second question starts closed, expands on click

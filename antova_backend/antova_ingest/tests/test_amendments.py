@@ -77,7 +77,7 @@ def test_negotiating_vendor_is_the_lowest_true_evaluated_price():
     # lower bound (rate table v2 leaves its dispatch warranty unpriced, so b is not ranked at all).
     assert choice["vendor_id"] == "vendor-a" == engine.negotiating_vendor_id(tender)
     assert choice["lowest_headline"] == "vendor-b" == engine.apparent_low_bidder_id(tender)
-    assert choice["basis"] == "lowest true evaluated price"
+    assert choice["basis"] == "lowest evaluated total"
     assert [(e["vendor_id"], e["reason"]) for e in choice["excluded"]] == [("vendor-b", "UNPRICED_ITEMS")]
     assert "PARAM-06" in choice["excluded"][0]["detail"]
     # Priced with the months-only table v1, vendor-b has a full price (482,800) and nobody is excluded.
@@ -125,7 +125,7 @@ def test_concessions_default_to_the_negotiating_vendor_and_accept_a_named_one():
 def test_sample_tender_names_nordwerk_and_keeps_the_low_bidder_badge():
     result = run_ingest(PACK, locator=AnswerKeyLocator(load_expected()))
     badges = {v.id: v.badge for v in result.tender.vendors}
-    assert badges == {"vendor-a": "Lowest Evaluated Price", "vendor-b": "Apparent Low Bidder", "vendor-c": "Bidder"}
+    assert badges == {"vendor-a": "Lowest evaluated total", "vendor-b": "Lowest base bid", "vendor-c": "Bidder"}
     choice = result.stats["negotiating_vendor"]
     assert (choice["vendor_id"], choice["lowest_headline"]) == ("vendor-a", "vendor-b")
     # The risk hidden in the cheapest-looking bid is still what the run reports.
