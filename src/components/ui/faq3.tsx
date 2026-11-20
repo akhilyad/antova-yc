@@ -115,7 +115,7 @@ export const Faq3 = ({
                 className="w-full sm:w-auto"
                 onClick={onSupportClick}
               >
-                Audit a tender free
+                Send your first tender
               </Button>
             )}
           </div>

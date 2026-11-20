@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { pillButtonClass } from './ui/hero-dithering-card';
+import { HERO_COPY, SAMPLE_AUDIT_URL } from '../constants';
 
 export type PageView = 'home' | 'team';
 
@@ -99,17 +100,14 @@ export function Navbar({ currentView, onNavigate, onAuditClick }: NavbarProps) {
 
         {/* Zone 3: Primary Action + Mobile Menu Toggle */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              setIsMenuOpen(false);
-              onAuditClick();
-            }}
+          <a
+            href={SAMPLE_AUDIT_URL}
+            onClick={() => setIsMenuOpen(false)}
             className={cn(pillButtonClass, 'h-9 gap-2 px-4 font-sans text-xs')}
           >
-            <span className="relative z-10">Audit a tender free</span>
+            <span className="relative z-10">{HERO_COPY.ctaLabel}</span>
             <ArrowRight className="relative z-10 h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-0.5" />
-          </button>
+          </a>
 
           <button
             type="button"

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils';
-import { HERO_COPY, SAMPLE_DATA_LABEL } from '../constants';
+import { HERO_COPY, SAMPLE_AUDIT_URL, SAMPLE_DATA_LABEL } from '../constants';
 import { CELLS, VENDORS, isLowerBound, vendorAdders, vendorPrice } from '../data/tender402';
 import { formatEuro } from '../utils/audit';
 import { pillButtonClass } from './ui/hero-dithering-card';
@@ -138,15 +138,22 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onAuditClick }) => {
           {HERO_COPY.subtext}
         </p>
 
-        <button
-          type="button"
-          onClick={onAuditClick}
+        {/* Straight into the live workbench's sample audit: no form, no sign-up. */}
+        <a
+          href={SAMPLE_AUDIT_URL}
           className={cn(pillButtonClass, 'mt-10 h-14 px-10 text-base')}
         >
           <span className="relative z-10">{HERO_COPY.ctaLabel}</span>
           <ArrowRight className="relative z-10 h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" />
-        </button>
+        </a>
         <p className="mt-5 font-mono text-[11px] text-ink/55 sm:text-xs">{HERO_COPY.subline}</p>
+        <button
+          type="button"
+          onClick={onAuditClick}
+          className="mt-2 font-sans text-sm text-ink/70 underline decoration-ink/25 underline-offset-4 transition-colors hover:text-ink hover:decoration-brand cursor-pointer"
+        >
+          {HERO_COPY.secondaryLabel}
+        </button>
       </motion.div>
 
       <motion.div

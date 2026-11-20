@@ -61,6 +61,15 @@ export const STATUS_PLAIN = {
   OMITTED: 'Left out',
 } as const;
 
+/**
+ * The live audit workbench (antova-backend-demo). "Audit a tender free" opens its sample audit:
+ * a real 33 kV switchgear tender, already run, no sign-up.
+ */
+export const WORKBENCH_URL = (
+  (import.meta.env?.VITE_WORKBENCH_URL as string | undefined) || 'https://antova-backend-demo-antovabackend.vercel.app'
+).replace(/\/$/, '');
+export const SAMPLE_AUDIT_URL = `${WORKBENCH_URL}/audit/TENDER-2026-402?tab=ledger`;
+
 export const HERO_COPY = {
   eyebrow: 'Bid audits for electrical tenders',
   headlineLead: 'Find what the lowest bid',
@@ -68,7 +77,8 @@ export const HERO_COPY = {
   subtext:
     'Drop in your spec and every vendor quote. See each missing item and price gap, with the page it came from.',
   ctaLabel: 'Audit a tender free',
-  subline: 'First tender free · under NDA · draft audit in 24 hours',
+  subline: 'Opens a real audit in one click · no sign-up',
+  secondaryLabel: 'Or send your own: first tender free, under NDA, draft in 24 hours',
 };
 
 export const MANIFESTO_COPY = {
@@ -172,7 +182,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       'Every gap cited and priced',
       'Draft audit in 24 hours, approved by your team',
     ],
-    buttonText: 'Audit a tender free',
+    buttonText: 'Send your first tender',
     href: '#audit',
   },
   {
@@ -187,7 +197,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       'Revised bids re-run through negotiation',
       'PDF report',
     ],
-    buttonText: 'Audit a tender free',
+    buttonText: 'Send your first tender',
     href: '#audit',
   },
   {
