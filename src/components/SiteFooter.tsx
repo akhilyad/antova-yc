@@ -1,7 +1,7 @@
 import React from 'react';
 import type { PageView } from './Navbar';
 import HalftoneWordmarkFooter, { type FooterColumn } from './ui/halftone-wordmark-footer';
-import { TEAM_FOUNDER_DATA } from '../constants';
+import { SAMPLE_AUDIT_URL, TEAM_FOUNDER_DATA } from '../constants';
 
 interface SiteFooterProps {
   onNavigate: (view: PageView, sectionId?: string) => void;
@@ -27,7 +27,10 @@ const COLUMNS: FooterColumn[] = [
   },
   {
     title: 'Start',
-    links: [{ label: 'Audit a tender free', href: '/#audit' }],
+    links: [
+      { label: 'Audit a tender free', href: SAMPLE_AUDIT_URL },
+      { label: 'Send your own tender', href: '/#audit' },
+    ],
   },
 ];
 
