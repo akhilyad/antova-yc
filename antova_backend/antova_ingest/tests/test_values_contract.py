@@ -157,3 +157,31 @@ def test_the_sweep_signals_see_what_the_contract_parsers_read():
     assert sweep.SIGNALS["milestone_list"].search("85% within 30 days after delivery")
     assert sweep.SIGNALS["law"].search("governed by the laws of Germany")
     assert sweep.SIGNALS["forum"].search("German Arbitration Institute (DIS)")
+
+
+
+# --- Review fixes (a025ebe): a wrong value is worse than None. ------------------------------------
+
+def test_a_decimal_comma_rate_is_not_read_ten_times_too_high():
+    quote = "LDs of 0,5 % per day of delay"
+    assert parse_field("rate_per_period", quote, "ld_rate") is None
+    wrong = FieldValue("rate_per_period", (Decimal("5"), "day"), "5% per day")
+    assert not value_in_span(wrong, quote)
+    assert parse_field("milestone_list", "87,5% within 30 days after delivery; 12,5% at PAC", "p") is None
+
+
+def test_milestone_days_must_count_forward_from_the_event_itself():
+    assert parse_field("milestone_list",
+                       "20% 30 days before delivery; 80% within 30 days after delivery", "p") is None
+    assert parse_field("milestone_list", "20% prior to delivery; 80% at PAC", "p") is None
+    assert parse_field("milestone_list", "10% in advance of delivery; 90% at PAC", "p") is None
+    assert parse_field("milestone_list",
+                       "90% within 30 days of receipt of invoice following delivery; 10% at PAC", "p") is None
+    v = parse_field("milestone_list", "90% within 30 days from the date of delivery; 10% at PAC", "p")
+    assert v.value[0] == Milestone(Decimal("90"), "delivery", 30, None)
+
+
+def test_a_court_title_is_not_a_city():
+    assert parse_field("forum", "the courts of the Federal Republic of Germany shall have jurisdiction", "f") is None
+    assert parse_field("forum", "disputes go to the ordinary courts of the Canton of Zurich", "f") is None
+    assert parse_field("forum", "the courts of the State of New York", "f") is None

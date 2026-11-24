@@ -697,6 +697,12 @@ _RATE_UNIT = re.compile(
 _PERIOD_WORDS = {"daily": "day", "weekly": "week", "monthly": "month"}
 
 
+def _after_decimal_comma(text: str, m: re.Match) -> bool:
+    """True when a percentage's number is the tail of a decimal comma ("0,5 %" matches as "5 %").
+    Such a number is not read: a rate ten times too high is worse than no rate."""
+    return bool(re.search(r"\d,$", text[:m.start()]))
+
+
 def _parse_rate_per_period(quote: str) -> FieldValue | None:
     """A percentage per day or per week: (Decimal rate, "day" | "week"). A rate per month is not
     read: a month is not a whole number of weeks, so it has no exact weekly equivalent."""
@@ -705,6 +711,8 @@ def _parse_rate_per_period(quote: str) -> FieldValue | None:
             unit = _RATE_UNIT.match(sentence[m.end():])
             if not unit:
                 continue
+            if _after_decimal_comma(sentence, m):
+                return None
             period = (unit.group(1) or _PERIOD_WORDS[unit.group(2).lower()]).lower()
             if period == "month":
                 continue
@@ -790,6 +798,11 @@ _MILESTONE_UNREAD = re.compile(
 _CONDITION = re.compile(
     r"\b(?:against|subject\s+to|upon\s+(?:presentation|receipt|submission)\s+of)\s+(?:(?:the|a|an)\s+)?(.+)$",
     re.IGNORECASE)
+# A payment due before the event, or counted from something else (an invoice), is not N days after it.
+_NOT_AFTER_EVENT = re.compile(r"\bbefore\b|\bprior\s+to\b|\bin\s+advance\b|\bahead\s+of\b", re.IGNORECASE)
+_DAYS_ANCHOR = re.compile(
+    r"\s+(?:after|from|following|of)\s+(?:the\s+)?(?:date\s+of\s+(?:the\s+)?)?(?:issue\s+of\s+(?:the\s+)?)?"
+    r"(?:successful\s+)?", re.IGNORECASE)
 
 
 def _parse_milestone(segment: str) -> Milestone | None:
@@ -798,9 +811,15 @@ def _parse_milestone(segment: str) -> Milestone | None:
     condition = _CONDITION.search(rest)
     timing = rest[:condition.start()] if condition else rest
     event = _one_event(timing)
-    if event is None or _MILESTONE_UNREAD.search(timing):
+    if event is None or _MILESTONE_UNREAD.search(timing) or _NOT_AFTER_EVENT.search(timing):
         return None
     days = _MILESTONE_DAYS.search(timing)
+    if days:
+        # The days must count from the event itself: "30 days after delivery", not "30 days of invoice".
+        anchor = _DAYS_ANCHOR.match(timing, days.end())
+        counted_from = anchor and EVENT.match(timing, anchor.end())
+        if not counted_from or counted_from.lastgroup != event:
+            return None
     return Milestone(Decimal(m.group(1)), event, int(days.group(1)) if days else None,
                      condition.group(1).strip(" .;,") if condition else None)
 
@@ -808,7 +827,10 @@ def _parse_milestone(segment: str) -> Milestone | None:
 def _parse_milestone_list(quote: str) -> FieldValue | None:
     """Payment milestones in order. Every percentage must be tied to one project event and the
     percentages must add up to 100; anything else is a partial or unreadable schedule, so None."""
-    segments = [part for sentence in split_sentences(quote) for part in _MILESTONE_SPLIT.split(sentence)
+    sentences = split_sentences(quote)
+    if any(_after_decimal_comma(s, m) for s in sentences for m in _PERCENT.finditer(s)):
+        return None  # "12,5 %" would split into "12" and "5 %"
+    segments = [part for sentence in sentences for part in _MILESTONE_SPLIT.split(sentence)
                 if _PERCENT.search(part)]
     milestones = tuple(_parse_milestone(segment) for segment in segments)
     if not milestones or None in milestones or sum(ms.percent for ms in milestones) != 100:
@@ -858,7 +880,8 @@ _FORUMS = (
 _COURTS = re.compile(
     r"\bcourts?\s+(?:of|in|at)\s+(?:the\s+)?(?:city\s+of\s+)?"
     r"(?-i:([A-Z][\w\-]*(?:\s+(?:am|an|der|upon|on|de|del)\s+[A-Z][\w\-]*)?))", re.IGNORECASE)
-_NOT_A_PLACE = frozenset({"competent", "law", "justice", "appeal", "first", "arbitration", "international"})
+_NOT_A_PLACE = frozenset({"competent", "law", "justice", "appeal", "first", "arbitration", "international",
+                          "federal", "canton", "republic", "state", "kingdom"})
 
 
 def _parse_forum(quote: str) -> FieldValue | None:
@@ -872,7 +895,8 @@ def _parse_forum(quote: str) -> FieldValue | None:
                 found[code] = shown
         for m in _COURTS.finditer(sentence):
             city = m.group(1)
-            if city.lower() not in _NOT_A_PLACE:
+            # "the courts of the Canton of Zurich": a title followed by "of" is not the place.
+            if city.lower() not in _NOT_A_PLACE and not re.match(r"\s+of\b", sentence[m.end():]):
                 found["courts:" + "_".join(city.lower().split())] = f"courts of {city}"
     if len(found) != 1:
         return None
@@ -1166,9 +1190,10 @@ def value_in_span(value: FieldValue, text: str) -> bool:
         shown = float(value.display.split(" ", 1)[0])
         return any(math.isclose(float(m.group(1)), shown, rel_tol=1e-9) for m in _PERCENT.finditer(text))
     if kind == "rate_per_period":
-        return any(Decimal(m.group(1)) == value.value[0] for m in _PERCENT.finditer(text))
+        return any(Decimal(m.group(1)) == value.value[0] and not _after_decimal_comma(text, m)
+                   for m in _PERCENT.finditer(text))
     if kind == "milestone_list":
-        percents = {Decimal(m.group(1)) for m in _PERCENT.finditer(text)}
+        percents = {Decimal(m.group(1)) for m in _PERCENT.finditer(text) if not _after_decimal_comma(text, m)}
         days = {int(m.group(1)) for m in _MILESTONE_DAYS.finditer(text)}
         return all(ms.percent in percents and (ms.days_after is None or ms.days_after in days) for ms in value.value)
     if kind == "money_cap":
