@@ -185,3 +185,54 @@ def test_a_court_title_is_not_a_city():
     assert parse_field("forum", "the courts of the Federal Republic of Germany shall have jurisdiction", "f") is None
     assert parse_field("forum", "disputes go to the ordinary courts of the Canton of Zurich", "f") is None
     assert parse_field("forum", "the courts of the State of New York", "f") is None
+
+
+# --- Task 2 (R12, R13): plausible LD rates, decimal-comma percentages, figures in brackets. --------
+
+def test_a_rate_per_period_is_plausible_on_its_weekly_equivalent():
+    from antova_ingest.values import plausible, plausible_bounds
+    rate = FieldDef("ld_rate", "rate_per_period", "ge", "LD rate", plausible=("0.01% per day", "5% per day"))
+    low, high = plausible_bounds(rate)
+    assert low.value == (Decimal("0.01"), "day") and high.value == (Decimal("5"), "day")
+    assert plausible(rate, parse_field("rate_per_period", "LDs of 0.5% per day of delay", "ld_rate"))
+    assert plausible(rate, parse_field("rate_per_period", "LDs of 1% per week of delay", "ld_rate"))
+    assert plausible(rate, parse_field("rate_per_period", "LDs of 5% per day of delay", "ld_rate"))  # the bound
+    assert not plausible(rate, parse_field("rate_per_period", "LDs of 0.001% per day of delay", "ld_rate"))
+    assert not plausible(rate, parse_field("rate_per_period", "LDs of 40% per week of delay", "ld_rate"))
+
+
+def test_a_decimal_comma_percentage_is_not_read():
+    assert parse_field("percent", "liquidated damages capped at 7,5 % of the Contract Price", "ld_cap") is None
+    assert parse_field("percent", "LDs of 0,5 % per week of delay", "ld_rate") is None
+    assert parse_field("percent", "total liability limited to 12,5% of the contract price", "liability_cap") is None
+    # A grouped number is not a percentage either: "1,500 %" is not 500 %.
+    assert parse_field("percent", "liability limited to 1,500 % of the order value", "liability_cap") is None
+    # A comma followed by a space is a clause break, not a decimal comma.
+    v = parse_field("percent", "LDs of 0.5% per week, capped at 10 % of the contract price", "ld_cap")
+    assert v.value == 10.0
+    # Unrelated decimal commas elsewhere in the quote do not block the read.
+    v = parse_field("percent", "LDs of 0,5% per week apply, total liability is limited to 100% of the order value",
+                    "liability_cap")
+    assert v.value == 100.0
+
+
+def test_milestone_days_written_in_words_and_figures():
+    v = parse_field("milestone_list", "90% within thirty (30) days after delivery; 10% at PAC", "p")
+    assert v.value == (Milestone(Decimal("90"), "delivery", 30, None), Milestone(Decimal("10"), "pac", None, None))
+    assert value_in_span(v, "90% within thirty (30) days after delivery; 10% at PAC")
+    v = parse_field("milestone_list", "90% within sixty (60) calendar days from the date of delivery; 10% at PAC", "p")
+    assert v.value[0].days_after == 60
+    # The anchor and direction checks still apply to the bracketed figure.
+    assert parse_field("milestone_list", "90% thirty (30) days before delivery; 10% at PAC", "p") is None
+    assert parse_field("milestone_list",
+                       "90% within thirty (30) days of receipt of invoice; 10% at PAC", "p") is None
+    # Days in words only: a period this reader cannot count is not read as "at delivery".
+    assert parse_field("milestone_list", "90% within thirty days after delivery; 10% at PAC", "p") is None
+
+
+def test_an_earlier_event_passes_an_at_most_check():
+    title = FieldDef("title_event", "event", "le", "Title passes")
+    assert check(title, fv("event", "delivery"), fv("event", "notice_to_proceed"))[0]
+    assert check(title, fv("event", "delivery"), fv("event", "delivery"))[0]
+    assert not check(title, fv("event", "delivery"), fv("event", "pac"))[0]
+    assert not check(title, fv("event", "delivery"), fv("event", "not_an_event"))[0]

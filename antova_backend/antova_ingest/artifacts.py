@@ -6,8 +6,9 @@ SHA-256, so two runs on the same inputs give the same hash at every stage, and
 any stage can be rerun from the stored artifacts of the stages before it.
 
 The run fingerprint covers everything that decides a run's outcome besides the
-locator's answers: the input files, the ontology, the deterministic rules, the
-rate table, the system prompt, the locator mode and the package version.
+locator's answers: the input files, the ontology, the contract-terms ontology and
+its prompt, the deterministic rules, the rate table, the system prompt, the locator
+mode and the package version.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import antova_ingest
-from antova_ingest import extract, ontology
+from antova_ingest import contract_ontology, extract, ontology
 
 STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled")
 # The modules that hold deterministic rules: a change to any of them changes the fingerprint.
@@ -98,6 +99,16 @@ def ontology_hash(equipment_class: str = ontology.DEFAULT_EQUIPMENT_CLASS) -> st
     })
 
 
+def contract_ontology_hash() -> str:
+    """The contract terms (CT-01..CT-17), the event order their checks use, and the prompt that locates them."""
+    return sha256_of({
+        "parameters": [dataclasses.asdict(p) for p in contract_ontology.CONTRACT_PARAMETERS],
+        "contract_roles": contract_ontology.CONTRACT_ROLES,
+        "event_order": ontology.ORDINALS.get("event", ()),
+        "prompt": sha256_text(extract.build_contract_prompt()),
+    })
+
+
 def rules_hash() -> str:
     return sha256_of({name: _source_sha256(_PACKAGE_DIR / name) for name in RULE_MODULES})
 
@@ -123,6 +134,7 @@ def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
     parts = {
         "inputs": inputs,
         "ontology": ontology_hash(equipment_class) if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
+        "contract_ontology": contract_ontology_hash(),
         "rules": rules_hash(),
         "rate_table": rate_table,
         "prompt": sha256_text(extract.build_system_prompt(equipment_class))

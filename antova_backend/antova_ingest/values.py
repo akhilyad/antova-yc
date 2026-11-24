@@ -543,10 +543,11 @@ def _cap_basis(clause: str) -> str:
 def _parse_percent(quote: str, field_name: str, require_context: bool = True) -> FieldValue | None:
     """One percentage, chosen by the field: `ld_rate` (per week; per day or month is converted),
     `ld_cap` (a maximum on liquidated damages) or `liability_cap` (a limit on total liability).
-    "No liquidated damages" reads as 0 for both LD fields."""
+    "No liquidated damages" reads as 0 for both LD fields. A percentage written with a decimal comma
+    ("7,5 %", which matches as "5 %") is not read: None, never a value a tenth or ten times off."""
     if not require_context:
         m = _PERCENT.search(quote)
-        return _percent_value(m) if m else None
+        return _percent_value(m) if m and not _after_decimal_comma(quote, m) else None
     sentences = split_sentences(quote)
     if field_name in ("ld_rate", "ld_cap") and any(NO_LD.search(s) for s in sentences):
         return FieldValue("percent", 0.0, "0 %", qualifier="none")
@@ -556,15 +557,18 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
                 before, after = clause[:m.start()], clause[m.end():]
                 period, weekly = _RATE_PERIOD.match(after), _RATE_WEEKLY.match(after)
                 per = bool(period or weekly)
+                decimal_comma = _after_decimal_comma(clause, m)
                 if field_name == "ld_rate" and per and _LD_CONTEXT.search(sentence):
+                    if decimal_comma:
+                        return None
                     unit = period.group(1).lower() if period else ("day" if weekly.group(1).lower() == "daily" else "week")
                     return _percent_value(m, _PER_WEEK_FACTOR[unit], f"{_fmt(float(m.group(1)))} % per {unit}", "per_week")
                 is_cap = not per and bool(_CAP_BEFORE.search(before[-60:]) or _CAP_AFTER.match(after))
                 if field_name == "ld_cap" and is_cap and _LD_CONTEXT.search(sentence):
-                    return _percent_value(m, qualifier=_cap_basis(clause))
+                    return None if decimal_comma else _percent_value(m, qualifier=_cap_basis(clause))
                 if (field_name == "liability_cap" and is_cap and _LIABILITY_CONTEXT.search(clause)
                         and not _LD_CONTEXT.search(clause)):
-                    return _percent_value(m, qualifier=_cap_basis(clause))
+                    return None if decimal_comma else _percent_value(m, qualifier=_cap_basis(clause))
     return None
 
 
@@ -791,7 +795,9 @@ class Milestone:
 # A new milestone starts at a percentage after ";", "," or "and".
 _MILESTONE_SPLIT = re.compile(
     r"\s*(?:[;,]\s*(?:and\s+)?|\band\s+)(?=\d+(?:\.\d+)?\s*(?:%|per\s?cent\b|percent\b))", re.IGNORECASE)
-_MILESTONE_DAYS = re.compile(r"(?<![\w.])(\d+)\s*(?:calendar\s+)?days?\b", re.IGNORECASE)
+# "30 days", and the figure of "thirty (30) days".
+_MILESTONE_DAYS = re.compile(r"(?<![\w.])(\d+)\)?\s*(?:calendar\s+)?days?\b", re.IGNORECASE)
+_DAYS_WORD = re.compile(r"\bdays?\b", re.IGNORECASE)
 # Periods this reader does not turn into calendar days: working days, weeks, months.
 _MILESTONE_UNREAD = re.compile(
     r"(?<![\w.])\d+\s*(?:(?:working|business|banking)\s+days?|weeks?|months?)\b", re.IGNORECASE)
@@ -814,6 +820,8 @@ def _parse_milestone(segment: str) -> Milestone | None:
     if event is None or _MILESTONE_UNREAD.search(timing) or _NOT_AFTER_EVENT.search(timing):
         return None
     days = _MILESTONE_DAYS.search(timing)
+    if not days and _DAYS_WORD.search(timing):
+        return None  # "within thirty days": a period written in words is not "at" the event
     if days:
         # The days must count from the event itself: "30 days after delivery", not "30 days of invoice".
         anchor = _DAYS_ANCHOR.match(timing, days.end())
@@ -1104,6 +1112,12 @@ def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[b
         return passed, offered.display
     if isinstance(req, IPCode) and isinstance(off, IPCode):
         return (off.solid >= req.solid and off.liquid >= req.liquid), offered.display
+    if field.operator == "le" and field.kind == "event":
+        # Earlier is better (title passing at delivery rather than at PAC). An unknown event fails.
+        order = ORDINALS["event"]
+        if req not in order or off not in order:
+            return False, offered.display
+        return order.index(off) <= order.index(req), offered.display
     if field.operator == "ord":
         # Amendment A1: better than required is compliant. A value outside the declared order fails.
         order = ORDINALS[field.kind]
@@ -1122,6 +1136,8 @@ _NUMERIC_KINDS = frozenset({"current", "duration", "voltage", "temperature", "fa
 
 def _comparable(value: FieldValue) -> float:
     raw = value.value
+    if value.kind == "rate_per_period":
+        return float(per_week(raw))  # "0.01% per day" and "1% per week" on one scale
     if isinstance(raw, pint.Quantity):
         return raw.to(ureg.kelvin).magnitude if value.kind == "temperature" else raw.to_base_units().magnitude
     return float(raw)
