@@ -236,3 +236,126 @@ def test_an_earlier_event_passes_an_at_most_check():
     assert check(title, fv("event", "delivery"), fv("event", "delivery"))[0]
     assert not check(title, fv("event", "delivery"), fv("event", "pac"))[0]
     assert not check(title, fv("event", "delivery"), fv("event", "not_an_event"))[0]
+
+
+# --- R14: every contract-term field reads from its usual wording. -----------------------------------
+
+def test_bond_percentages_belong_to_the_bond_named_before_them():
+    assert parse_field("percent", "a warranty bond of 5% of the Contract Price", "warranty_bond_pct").value == 5.0
+    assert parse_field("percent", "performance bond equal to ten percent (10%) of the Price",
+                       "performance_bond_pct").value == 10.0
+    assert parse_field("percent", "advance payment bond of 10%", "advance_bond_pct").value == 10.0
+    both = "an advance payment bond of 10% and a performance bond of 15% of the Contract Price"
+    assert parse_field("percent", both, "advance_bond_pct").value == 10.0
+    assert parse_field("percent", both, "performance_bond_pct").value == 15.0
+    assert parse_field("percent", both, "warranty_bond_pct") is None
+    assert parse_field("percent", "a warranty bond of 2,5% of the Contract Price", "warranty_bond_pct") is None
+
+
+def test_termination_fee_percentage():
+    quote = "a termination fee of 5% of the price of the affected Goods"
+    assert parse_field("percent", quote, "termination_fee_pct").value == 5.0
+    assert parse_field("percent", "a termination fee of 7,5% of the price", "termination_fee_pct") is None
+    assert parse_field("percent", "a warranty bond of 5% of the Contract Price", "termination_fee_pct") is None
+
+
+def test_ntp_deadline_in_months_and_in_days():
+    v = parse_field("months", "The NTP shall be issued within 8 months from the Project Purchase Order.",
+                    "ntp_deadline_months")
+    assert v.value == 8 and v.qualifier == "months"
+    v = parse_field("months", "within 8 months from the Project Purchase Order", "ntp_deadline_months")
+    assert v.value == 8
+    v = parse_field("months", "Notice to proceed no later than 60 days from PO.", "ntp_deadline_months")
+    assert v.value == Decimal(60) * 12 / 365 and v.qualifier == "days"
+    assert v.display == "60 days (1.97 months at 365/12 days per month)"
+    assert value_in_span(v, "Notice to proceed no later than 60 days from PO.")
+    # A warranty period is not an NTP deadline.
+    assert parse_field("months", "warranty of 24 months from delivery", "ntp_deadline_months") is None
+
+
+def test_design_life_in_years_is_held_in_months():
+    v = parse_field("months", "minimum operating period of 35 years", "design_life_months")
+    assert v.value == 420 and v.display == "35 years (420 months)" and v.qualifier == "years"
+    assert value_in_span(v, "minimum operating period of 35 years")
+    assert not value_in_span(v, "minimum operating period of 30 years")
+    assert parse_field("months", "warranty of 35 years", "design_life_months") is None
+    # The warranty reader is unchanged.
+    assert parse_field("months", "warranty of 24 months from delivery", "warranty_months").value == 24
+
+
+def test_ld_triggers_are_the_delayed_events():
+    v = parse_field("scope", "Liquidated damages apply for late delivery and/or any late Cold Commissioning "
+                             "and/or Hot Commissioning.", "ld_triggers")
+    assert v.value == ("delivery", "cold_commissioning", "hot_commissioning")
+    v = parse_field("scope", "LDs of 0.5% per day of delay in delivery, capped at 10% of the price payable at PAC.",
+                    "ld_triggers")
+    assert v.value == ("delivery",)
+    assert parse_field("scope", "No liquidated damages apply for late delivery.", "ld_triggers") is None
+    triggers = FieldDef("ld_triggers", "scope", "ge", "LD triggers")
+    required = fv("scope", ("delivery", "cold_commissioning"))
+    assert check(triggers, required, fv("scope", ("delivery", "cold_commissioning", "hot_commissioning")))[0]
+    assert not check(triggers, required, fv("scope", ("delivery",)))[0]
+
+
+def test_fa_reference_names_the_incorporated_agreement():
+    v = parse_field("scope", "This Purchase Order is subject to the terms of the Framework Agreement dated "
+                             "10 January 2026.", "fa_reference")
+    assert v.value == "framework agreement dated 10 january 2026"
+    v = parse_field("scope", "The Framework Agreement No. FA-2025-017 forms an integral part of this offer.",
+                    "fa_reference")
+    assert v.display == "Framework Agreement No. FA-2025-017"
+    assert parse_field("scope", "We have no framework agreement with the group yet", "fa_reference") is None
+
+
+def test_order_of_precedence_is_the_ranked_document_list():
+    v = parse_field("scope", "In case of conflict, the documents shall prevail in the following order: (1) the "
+                             "Purchase Order; (2) the Framework Agreement; (3) the Technical Specification; "
+                             "(4) the Offer.", "order")
+    assert v.value == ("purchase_order", "framework_agreement", "technical_specification", "offer")
+    assert v.display == "Purchase Order > Framework Agreement > Technical Specification > Offer"
+    v = parse_field("scope", "Order of precedence: 1. Special Conditions, 2. General Conditions of Purchase, "
+                             "3. Material Requisition and 4. the Vendor Offer.", "order")
+    assert v.value == ("special_conditions", "general_conditions", "technical_specification", "offer")
+    # Prose rankings are left to the reader.
+    assert parse_field("scope", "The Purchase Order prevails over the Offer.", "order") is None
+    order = FieldDef("order", "scope", "eq", "Order")
+    assert not check(order, v, fv("scope", tuple(reversed(v.value))))[0]
+
+
+def test_warranty_coverage_and_place_of_repair():
+    assert parse_field("scope", "The warranty covers all components of the supply.", "warranty_coverage").value == 1
+    assert parse_field("scope", "The warranty covers only the components listed in Annex 3.",
+                       "warranty_coverage").value == 0
+    assert parse_field("scope", "Defective parts shall be repaired or replaced on site at the Seller's cost.",
+                       "warranty_on_site").value == 1
+    assert parse_field("scope", "Defective parts shall be returned to the factory for repair.",
+                       "warranty_on_site").value == 0
+
+
+def test_liability_exclusions_are_the_carve_outs():
+    v = parse_field("scope", "The limitation of liability shall not apply in case of gross negligence, wilful "
+                             "misconduct or fraud.", "liability_exclusions")
+    assert v.value == ("gross_negligence", "wilful_misconduct", "fraud")
+    assert parse_field("scope", "Total liability is limited to 100% of the price.", "liability_exclusions") is None
+
+
+def test_named_place_price_basis_and_credit_insurance():
+    assert parse_field("scope", "Delivery DAP Site Rotterdam (Incoterms 2020).", "named_place").value == "site rotterdam"
+    assert parse_field("scope", "The Contract Price is in EUR.", "price_currency").value == "EUR"
+    assert parse_field("scope", "All prices are quoted in pounds sterling.", "price_currency").value == "GBP"
+    assert parse_field("scope", "Prices in EUR; spares in GBP.", "price_currency") is None
+    assert parse_field("scope", "The price is fixed and firm from the issue of the Notice to Proceed.",
+                       "price_fixed_after_ntp").value == 1
+    assert parse_field("scope", "The price is fixed until NTP; thereafter it is subject to escalation.",
+                       "price_fixed_after_ntp").value == 0
+    assert parse_field("scope", "The Contract Price is a fixed lump sum.", "price_type").value == "fixed_lump_sum"
+    assert parse_field("scope", "The price is partly variable: the steel content is indexed.",
+                       "price_type").value == "partly_variable"
+    assert parse_field("scope", "The price is not subject to any escalation.", "escalation_formula").value == "none"
+    assert parse_field("scope", "Price adjustment formula: P = P0 x (0.15 + 0.85 x Cu/Cu0).",
+                       "escalation_formula").value == "formula"
+    assert parse_field("scope", "The Supplier holds credit insurance with Northgate Credit Assurance plc.",
+                       "credit_insurer").display == "Northgate Credit Assurance plc"
+    v = parse_field("money_cap", "secured value of EUR 2,000,000 under the credit insurance policy",
+                    "credit_secured_value")
+    assert v.value == Decimal("2000000") and v.qualifier == "EUR"

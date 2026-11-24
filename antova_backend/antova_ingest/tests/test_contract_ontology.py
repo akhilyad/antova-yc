@@ -111,6 +111,57 @@ def test_an_ld_rate_outside_the_range_is_not_plausible():
     assert plausible(warranty, parse_field("months", "warranty of 24 months", "warranty_months"))
 
 
+# One usual contract wording per field (ruling R14): a field no wording can fill is a term that is
+# always "missing", so its checks never run.
+CANONICAL = {
+    ("CT-01", "ld_rate"): "Liquidated damages of 0.5% of the Contract Price per day of delay.",
+    ("CT-01", "ld_cap"): "Liquidated damages are capped at 10 % of the Contract Price.",
+    ("CT-01", "ld_triggers"): "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning.",
+    ("CT-02", "liability_cap"): "The Supplier's total liability is limited to 100% of the Contract Price.",
+    ("CT-02", "liability_cap_money"): "The Supplier's total liability is limited to EUR 500,000.",
+    ("CT-02", "liability_exclusions"): "The limitation of liability shall not apply in case of gross negligence, "
+                                       "wilful misconduct or fraud.",
+    ("CT-03", "warranty_months"): "The warranty period is 24 months from PAC.",
+    ("CT-03", "warranty_start"): "The warranty period starts from Provisional Acceptance (PAC).",
+    ("CT-03", "warranty_on_site"): "Defective parts shall be repaired or replaced on site at the Seller's cost.",
+    ("CT-03", "warranty_coverage"): "The warranty covers all components of the supply.",
+    ("CT-04", "warranty_bond_pct"): "The Supplier provides a warranty bond of 5% of the Contract Price.",
+    ("CT-04", "warranty_bond_months"): "The warranty bond is valid for 24 months.",
+    ("CT-05", "performance_bond_pct"): "A performance bond equal to ten percent (10%) of the Price.",
+    ("CT-05", "performance_bond_release"): "The performance bond is released at Provisional Acceptance.",
+    ("CT-06", "advance_bond_pct"): "Against an advance payment bond of 10%.",
+    ("CT-07", "milestones"): "90% within thirty (30) days after delivery; 10% at PAC against a warranty bond.",
+    ("CT-08", "termination_fee_pct"): "The Buyer pays a termination fee of 5% of the price of the affected Goods.",
+    ("CT-09", "title_event"): "Title to the Goods passes to the Buyer on delivery.",
+    ("CT-10", "ntp_deadline_months"): "The Buyer may issue the NTP within 8 months from the Project Purchase Order.",
+    ("CT-11", "design_life_months"): "The equipment has a minimum operating period of 35 years.",
+    ("CT-12", "incoterm"): "Delivery DAP Site Rotterdam (Incoterms 2020).",
+    ("CT-12", "named_place"): "Delivery DAP Site Rotterdam (Incoterms 2020).",
+    ("CT-13", "price_currency"): "The Contract Price is in EUR.",
+    ("CT-13", "price_fixed_after_ntp"): "The price is fixed and firm from the issue of the Notice to Proceed.",
+    ("CT-13", "price_type"): "The Contract Price is a fixed lump sum.",
+    ("CT-13", "escalation_formula"): "The price is not subject to any escalation.",
+    ("CT-14", "law"): "This contract is governed by the laws of England and Wales.",
+    ("CT-14", "forum"): "Disputes shall be finally settled by ICC arbitration in London.",
+    ("CT-15", "credit_insurer"): "The Supplier holds credit insurance with Northgate Credit Assurance plc.",
+    ("CT-15", "credit_secured_value"): "The secured value under the credit insurance is EUR 2,000,000.",
+    ("CT-16", "fa_reference"): "This order is subject to the terms of the Framework Agreement dated 10 January 2026.",
+    ("CT-17", "order"): "In case of conflict, the documents prevail in the following order: (1) the Purchase "
+                        "Order; (2) the Framework Agreement; (3) the Technical Specification; (4) the Offer.",
+}
+
+
+def test_every_field_reads_from_a_usual_wording():
+    fields = {(p.id, f.name): f for p in CONTRACT_PARAMETERS for f in p.fields}
+    assert set(CANONICAL) == set(fields)
+    for key, quote in CANONICAL.items():
+        f = fields[key]
+        value = parse_field(f.kind, quote, f.name)
+        assert value is not None, key
+        assert value.kind == f.kind, key
+        assert plausible(f, value), key
+
+
 def test_better_is_the_buyers_side():
     # Title passing earlier and lower termination fees are better: both are "at most" checks.
     assert field("CT-09", "title_event").operator == "le"

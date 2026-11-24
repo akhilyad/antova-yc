@@ -6,7 +6,8 @@ the commercial terms of vendor bids. "Better is" is always the buyer's side, as 
 ontology: a field passes when the offered value is at least as good as the required one.
 
 Plausible ranges are written like values in a contract, as in ontology.py. A design life is held in
-months (the only period kind values.py reads), so 10 to 50 years is 120 to 600 months.
+months, so 10 to 50 years is 120 to 600 months; values.py reads "35 years" as 420 months and shows both.
+An NTP deadline written in days is restated in months (days x 12 / 365), also shown.
 """
 
 from __future__ import annotations
