@@ -679,6 +679,207 @@ def standards_satisfied(required: tuple, offered: tuple) -> bool:
     return True
 
 
+# --- Contract terms ------------------------------------------------------------------------------
+#
+# A rate per day or week (delay LDs), a project event (where a warranty starts), payment milestones,
+# the governing law and the disputes forum. Rates and percentages are Decimal, read as written. A
+# wording that cannot be read for certain (a rate per month, two events, two laws) is None.
+
+def _dec_text(number: Decimal) -> str:
+    """A Decimal as a sentence writes it: no exponent, no trailing zeros ("0.5", "1", "1.05", "100")."""
+    return format(number.normalize(), "f")
+
+
+_RATE_UNIT = re.compile(
+    r"^\s*(?:of\s+(?:the\s+)?[^.;,%]{0,40}?\s+)?"
+    r"(?:(?:per|for\s+each|each|every|/)\s*(?:(?:complete|full|started|commenced|whole|calendar)\s+)?"
+    r"(day|week|month)s?\b|(daily|weekly|monthly)\b)", re.IGNORECASE)
+_PERIOD_WORDS = {"daily": "day", "weekly": "week", "monthly": "month"}
+
+
+def _parse_rate_per_period(quote: str) -> FieldValue | None:
+    """A percentage per day or per week: (Decimal rate, "day" | "week"). A rate per month is not
+    read: a month is not a whole number of weeks, so it has no exact weekly equivalent."""
+    for sentence in split_sentences(quote):
+        for m in _PERCENT.finditer(sentence):
+            unit = _RATE_UNIT.match(sentence[m.end():])
+            if not unit:
+                continue
+            period = (unit.group(1) or _PERIOD_WORDS[unit.group(2).lower()]).lower()
+            if period == "month":
+                continue
+            rate = Decimal(m.group(1))
+            return FieldValue("rate_per_period", (rate, period), f"{_dec_text(rate)}% per {period}")
+    return None
+
+
+def per_week(value: tuple[Decimal, str]) -> Decimal:
+    """A rate per day or per week, restated per week (a day's rate times 7). Exact: Decimal throughout."""
+    rate, period = value
+    if period == "day":
+        return rate * 7
+    if period == "week":
+        return rate
+    raise ValueError(f"not a rate per day or per week: {period!r}")
+
+
+# Project events, matched longest wording first ("cold commissioning" before "commissioning").
+# Abbreviations are matched in capitals only, so "cod" or "pac" in running text is not an event.
+_EVENT_PATTERNS = (
+    ("cold_commissioning", r"\bcold\s+commissioning\b"),
+    ("hot_commissioning", r"\bhot\s+commissioning\b"),
+    ("cod", r"\bcommercial\s+operations?(?:\s+date)?\b|(?-i:\bCOD\b)"),
+    ("pac", r"\bprovisional\s+acceptance\b|(?-i:\bPAC\b)"),
+    ("fac", r"\bfinal\s+acceptance\b|(?-i:\bFAC\b)"),
+    ("notice_to_proceed", r"\bnotice\s+to\s+proceed\b|(?-i:\bNTP\b)"),
+    ("delivery", r"\bdeliver(?:y|ies|ed)\b"),
+    ("commissioning", r"\bcommissioning\b"),
+)
+EVENT = re.compile("|".join(f"(?P<{code}>{pattern})" for code, pattern in _EVENT_PATTERNS), re.IGNORECASE)
+EVENT_LABELS = {
+    "notice_to_proceed": "notice to proceed", "delivery": "delivery", "cold_commissioning": "cold commissioning",
+    "hot_commissioning": "hot commissioning", "commissioning": "commissioning", "cod": "COD", "pac": "PAC",
+    "fac": "FAC",
+}
+# The words that make an event the start point: "from PAC", "starts on the delivery date".
+_EVENT_START = re.compile(
+    r"\b(?:from|after|following|as\s+of|on|upon|at|starting|commencing|starts?|begins?)\s+(?:the\s+)?"
+    r"(?:date\s+of\s+(?:the\s+)?)?(?:issue\s+of\s+(?:the\s+)?)?(?:successful\s+)?$", re.IGNORECASE)
+# "whichever is earlier": a start point made of two events, which no single event stands for.
+_COMBINED_EVENT = re.compile(r"\bwhichever\b|\bthe\s+(?:earlier|later|first)\s+of\b", re.IGNORECASE)
+
+
+def _one_event(text: str) -> str | None:
+    """The one event `text` names, or the one it names as a start point when it names several."""
+    if _COMBINED_EVENT.search(text):
+        return None
+    found = [(m.lastgroup, bool(_EVENT_START.search(text[max(0, m.start() - 60):m.start()])))
+             for m in EVENT.finditer(text)]
+    codes = {code for code, _ in found}
+    if len(codes) > 1:
+        codes = {code for code, started in found if started}
+    return codes.pop() if len(codes) == 1 else None
+
+
+def _parse_event(quote: str) -> FieldValue | None:
+    code = _one_event(" ".join(s for s in split_sentences(quote) if not _has_carve_out(s)))
+    return FieldValue("event", code, EVENT_LABELS[code]) if code else None
+
+
+@dataclass(frozen=True)
+class Milestone:
+    percent: Decimal
+    event: str  # a code from ORDINALS["event"]
+    days_after: int | None  # None: no number of days stated ("10% at PAC")
+    condition: str | None  # what the payment is made against ("warranty bond"), as written
+
+    @property
+    def display(self) -> str:
+        timing = f"{self.days_after} days after" if self.days_after is not None else "at"
+        shown = f"{_dec_text(self.percent)}% {timing} {EVENT_LABELS[self.event]}"
+        return f"{shown} against {self.condition}" if self.condition else shown
+
+
+# A new milestone starts at a percentage after ";", "," or "and".
+_MILESTONE_SPLIT = re.compile(
+    r"\s*(?:[;,]\s*(?:and\s+)?|\band\s+)(?=\d+(?:\.\d+)?\s*(?:%|per\s?cent\b|percent\b))", re.IGNORECASE)
+_MILESTONE_DAYS = re.compile(r"(?<![\w.])(\d+)\s*(?:calendar\s+)?days?\b", re.IGNORECASE)
+# Periods this reader does not turn into calendar days: working days, weeks, months.
+_MILESTONE_UNREAD = re.compile(
+    r"(?<![\w.])\d+\s*(?:(?:working|business|banking)\s+days?|weeks?|months?)\b", re.IGNORECASE)
+_CONDITION = re.compile(
+    r"\b(?:against|subject\s+to|upon\s+(?:presentation|receipt|submission)\s+of)\s+(?:(?:the|a|an)\s+)?(.+)$",
+    re.IGNORECASE)
+
+
+def _parse_milestone(segment: str) -> Milestone | None:
+    m = _PERCENT.search(segment)
+    rest = segment[m.end():]
+    condition = _CONDITION.search(rest)
+    timing = rest[:condition.start()] if condition else rest
+    event = _one_event(timing)
+    if event is None or _MILESTONE_UNREAD.search(timing):
+        return None
+    days = _MILESTONE_DAYS.search(timing)
+    return Milestone(Decimal(m.group(1)), event, int(days.group(1)) if days else None,
+                     condition.group(1).strip(" .;,") if condition else None)
+
+
+def _parse_milestone_list(quote: str) -> FieldValue | None:
+    """Payment milestones in order. Every percentage must be tied to one project event and the
+    percentages must add up to 100; anything else is a partial or unreadable schedule, so None."""
+    segments = [part for sentence in split_sentences(quote) for part in _MILESTONE_SPLIT.split(sentence)
+                if _PERCENT.search(part)]
+    milestones = tuple(_parse_milestone(segment) for segment in segments)
+    if not milestones or None in milestones or sum(ms.percent for ms in milestones) != 100:
+        return None
+    return FieldValue("milestone_list", milestones, "; ".join(ms.display for ms in milestones))
+
+
+# Jurisdictions, read only beside the word "law": "the laws of Germany", "English law".
+_LAWS = (
+    ("english", "English", r"\bEngland(?:\s+and\s+Wales)?\b|\bEnglish\b"),
+    ("scottish", "Scottish", r"\bScotland\b|\bScottish\b"),
+    ("german", "German", r"\bGermany\b|\bGerman\b"),
+    ("swiss", "Swiss", r"\bSwitzerland\b|\bSwiss\b"),
+    ("austrian", "Austrian", r"\bAustria\b|\bAustrian\b"),
+    ("french", "French", r"\bFrance\b|\bFrench\b"),
+    ("dutch", "Dutch", r"\bNetherlands\b|\bDutch\b"),
+    ("swedish", "Swedish", r"\bSweden\b|\bSwedish\b"),
+    ("new_york", "New York", r"\bNew\s+York\b"),
+    ("singapore", "Singapore", r"\bSingapore(?:an)?\b"),
+)
+_LAW_AFTER = re.compile(r"^\s+(?:substantive\s+)?laws?\b", re.IGNORECASE)
+_LAW_BEFORE = re.compile(
+    r"\blaws?\s+(?:in\s+force\s+in|of)\s+(?:the\s+)?(?:(?:State|Federal\s+Republic|Republic|Kingdom)\s+of\s+(?:the\s+)?)?$",
+    re.IGNORECASE)
+
+
+def _parse_law(quote: str) -> FieldValue | None:
+    found: dict[str, str] = {}
+    for sentence in split_sentences(quote):
+        for code, name, pattern in _LAWS:
+            for m in re.finditer(pattern, sentence):
+                if _LAW_AFTER.match(sentence[m.end():]) or _LAW_BEFORE.search(sentence[:m.start()]):
+                    found[code] = name
+    if len(found) != 1:
+        return None  # no law named, or two: the clause is read by a person
+    code, name = found.popitem()
+    return FieldValue("law", code, f"{name} law")
+
+
+_FORUM_CONTEXT = re.compile(r"arbitra|disput|\bcourts?\b|tribunal|jurisdiction|settle", re.IGNORECASE)
+_FORUMS = (
+    ("dis", "DIS arbitration",
+     r"German\s+Arbitration\s+Institute|Deutsche\s+Institution\s+f(?:ü|ue)r\s+Schiedsgerichtsbarkeit|(?-i:\bDIS\b)"),
+    ("icc", "ICC arbitration", r"International\s+Chamber\s+of\s+Commerce|(?-i:\bICC\b)(?!\s*Incoterms)"),
+    ("lcia", "LCIA arbitration", r"London\s+Court\s+of\s+International\s+Arbitration|(?-i:\bLCIA\b)"),
+)
+_COURTS = re.compile(
+    r"\bcourts?\s+(?:of|in|at)\s+(?:the\s+)?(?:city\s+of\s+)?"
+    r"(?-i:([A-Z][\w\-]*(?:\s+(?:am|an|der|upon|on|de|del)\s+[A-Z][\w\-]*)?))", re.IGNORECASE)
+_NOT_A_PLACE = frozenset({"competent", "law", "justice", "appeal", "first", "arbitration", "international"})
+
+
+def _parse_forum(quote: str) -> FieldValue | None:
+    """The disputes forum: "dis", "icc", "lcia", or "courts:<city>". Two forums is None."""
+    found: dict[str, str] = {}
+    for sentence in split_sentences(quote):
+        if not _FORUM_CONTEXT.search(sentence):
+            continue  # "DAP per ICC Incoterms" names no forum
+        for code, shown, pattern in _FORUMS:
+            if re.search(pattern, sentence, re.IGNORECASE):
+                found[code] = shown
+        for m in _COURTS.finditer(sentence):
+            city = m.group(1)
+            if city.lower() not in _NOT_A_PLACE:
+                found["courts:" + "_".join(city.lower().split())] = f"courts of {city}"
+    if len(found) != 1:
+        return None
+    code, shown = found.popitem()
+    return FieldValue("forum", code, shown)
+
+
 QUANTITY_KINDS = tuple(_QUANTITY_PATTERNS)
 FIELD_PARSERS = {
     "temperature": _parse_temperature,
@@ -694,6 +895,11 @@ FIELD_PARSERS = {
     "money_cap": _parse_money_cap,
     "altitude": _parse_altitude,
     "standard": _parse_standard,
+    "rate_per_period": _parse_rate_per_period,
+    "event": _parse_event,
+    "milestone_list": _parse_milestone_list,
+    "law": _parse_law,
+    "forum": _parse_forum,
 }
 # Whether something is part of the price: spares, site supervision. Read per field from the clauses that
 # name it. An exclusion anywhere beats an inclusion: the buyer is told the bad news.
@@ -844,6 +1050,12 @@ def _unit_label(value: FieldValue) -> str:
 def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[bool, str]:
     """Return (passed, offered value expressed in the required unit)."""
     req, off = required.value, offered.value
+    if field.kind == "rate_per_period":
+        # Compared per week; a daily offer also shows its weekly equivalent.
+        a, b = per_week(off), per_week(req)
+        passed = {"ge": a >= b, "le": a <= b}.get(field.operator, a == b)
+        shown = offered.display if off[1] == "week" else f"{offered.display} ({_dec_text(a)}% per week)"
+        return passed, shown
     if isinstance(req, pint.Quantity) and isinstance(off, pint.Quantity):
         try:
             converted = off.to(req.units).magnitude
@@ -953,6 +1165,12 @@ def value_in_span(value: FieldValue, text: str) -> bool:
             return True  # "no liquidated damages": read from wording, no number to find
         shown = float(value.display.split(" ", 1)[0])
         return any(math.isclose(float(m.group(1)), shown, rel_tol=1e-9) for m in _PERCENT.finditer(text))
+    if kind == "rate_per_period":
+        return any(Decimal(m.group(1)) == value.value[0] for m in _PERCENT.finditer(text))
+    if kind == "milestone_list":
+        percents = {Decimal(m.group(1)) for m in _PERCENT.finditer(text)}
+        days = {int(m.group(1)) for m in _MILESTONE_DAYS.finditer(text)}
+        return all(ms.percent in percents and (ms.days_after is None or ms.days_after in days) for ms in value.value)
     if kind == "money_cap":
         return any((found := _money_in(sentence)) and found[0] == value.value for sentence in split_sentences(text))
     if kind == "altitude":
@@ -968,7 +1186,7 @@ def value_in_span(value: FieldValue, text: str) -> bool:
     if kind == "incoterm":
         return bool(re.search(rf"\b{re.escape(value.value)}\b", text)) or any(
             code == value.value and pattern.search(text) for pattern, code in _INCOTERM_WORDS)
-    return True  # material, protocol, marshalling: read from words, no number involved
+    return True  # material, protocol, marshalling, event, law, forum: read from words, no number involved
 
 
 def rule_text(param: ParameterDef, requirement: dict[str, FieldValue]) -> str:

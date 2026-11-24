@@ -228,6 +228,9 @@ ORDINALS: dict[str, tuple[str, ...]] = {
     "incoterm": ("EXW", "FCA", "FAS", "FOB", "CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"),
     # Internal arc classification: accessible sides covered (front; front and lateral; all).
     "iac": ("AF", "AFL", "AFLR"),
+    # Project events, earliest first: a warranty that starts later gives the buyer more.
+    "event": ("notice_to_proceed", "delivery", "cold_commissioning", "hot_commissioning", "commissioning",
+              "cod", "pac", "fac"),
 }
 
 # Spec §10: lower number = stronger evidence of what will be delivered.

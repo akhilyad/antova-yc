@@ -19,6 +19,8 @@ FieldKind = Literal[
     "current", "duration", "voltage", "temperature", "material", "ip", "iac",
     "protocol", "marshalling", "fat_days", "incoterm", "months",
     "lead_time", "percent", "money_cap", "altitude", "standard", "scope",
+    # Contract terms: an LD-style rate per day or week, a project event, payment milestones, law, forum.
+    "rate_per_period", "event", "milestone_list", "law", "forum",
 ]
 
 
