@@ -263,12 +263,14 @@ def test_ntp_deadline_in_months_and_in_days():
     v = parse_field("months", "The NTP shall be issued within 8 months from the Project Purchase Order.",
                     "ntp_deadline_months")
     assert v.value == 8 and v.qualifier == "months"
-    v = parse_field("months", "within 8 months from the Project Purchase Order", "ntp_deadline_months")
-    assert v.value == 8
-    v = parse_field("months", "Notice to proceed no later than 60 days from PO.", "ntp_deadline_months")
+    # Without the issuing of the NTP, a period from the order is any period (review round 1: a delivery
+    # period reads the same), so the bare fragment is not read.
+    assert parse_field("months", "within 8 months from the Project Purchase Order", "ntp_deadline_months") is None
+    quote = "The Notice to Proceed shall be issued no later than 60 days from PO."
+    v = parse_field("months", quote, "ntp_deadline_months")
     assert v.value == Decimal(60) * 12 / 365 and v.qualifier == "days"
     assert v.display == "60 days (1.97 months at 365/12 days per month)"
-    assert value_in_span(v, "Notice to proceed no later than 60 days from PO.")
+    assert value_in_span(v, quote)
     # A warranty period is not an NTP deadline.
     assert parse_field("months", "warranty of 24 months from delivery", "ntp_deadline_months") is None
 

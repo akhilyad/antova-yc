@@ -162,6 +162,61 @@ def test_every_field_reads_from_a_usual_wording():
         assert plausible(f, value), key
 
 
+# Near-variants, negations and look-alikes (review round 1). Each reader returns None or the value the
+# wording really states, never a plausible wrong one.
+NOT_A_VALUE = [
+    ("ntp_deadline_months", "Delivery shall take place within 14 months after NTP.", None),
+    ("ntp_deadline_months", "Delivery within 10 months from the Purchase Order.", None),
+    ("ntp_deadline_months", "The price is fixed for 18 months from contract signature.", None),
+    ("ntp_deadline_months", "Payment within 30 days from the order.", None),
+    ("ntp_deadline_months", "The Buyer may issue the NTP within 1,5 months from the PO.", None),
+    ("ntp_deadline_months", "The Buyer may issue the NTP within eight (8) months from the PO.", 8),
+    ("design_life_months", "Spare parts shall be available for 10 years over the design life of 30 years.", 360),
+    ("design_life_months", "The design life is thirty (30) years.", 360),
+    ("fa_reference", "The Framework Agreement does not apply to this order.", None),
+    ("fa_reference", "This offer is not subject to the Framework Agreement.", None),
+    ("order", "Clause 2.1: In case of conflict, the Purchase Order prevails over the Offer.", None),
+    ("order", "Order of precedence: documents listed in descending order of priority: 1. Purchase Order; 2. Offer.",
+     ("purchase_order", "offer")),
+    ("warranty_on_site", "The Contractor shall remedy any defect in the Works on site.", 1),
+    ("warranty_coverage", "The warranty covers all components, except normal wear and tear.", 1),
+    ("warranty_coverage", "The warranty covers all components and shall only start at PAC.", 1),
+    ("liability_exclusions", "The Supplier excludes all liability for third-party claims.", None),
+    ("named_place", "FCA, Incoterms 2020, named place Hamburg.", "hamburg"),
+    ("named_place", "Delivery DAP Incoterms 2020 Rotterdam.", "rotterdam"),
+    ("price_fixed_after_ntp", "The price is fixed from NTP and shall not be subject to escalation.", 1),
+    ("price_type", "The Contract Price is a fixed lump sum and shall not be subject to adjustment.", "fixed_lump_sum"),
+    ("price_type", "The Contract Price is a fixed lump sum, not subject to escalation.", "fixed_lump_sum"),
+    ("escalation_formula", "No escalation applies before NTP; thereafter the price is adjusted per the formula "
+                           "P = P0 x Cu/Cu0.", "formula"),
+    ("escalation_formula", "No escalation applies before NTP.", None),
+    ("escalation_formula", "No escalation formula applies.", "none"),
+    ("credit_insurer", "The equipment shall be insured by the Supplier until delivery.", None),
+    ("credit_secured_value", "The performance security of EUR 500,000 is returned at PAC.", None),
+    ("termination_fee_pct", "If the cap of 10% is reached, the Buyer may terminate the Contract.", None),
+    ("termination_fee_pct", "On termination, the performance bond of 10% shall be returned.", None),
+    ("termination_fee_pct", "On termination for convenience the Buyer pays 10% if notice is given 6 months before "
+                            "delivery and 50% thereafter.", None),
+    ("termination_fee_pct", "Overdue amounts bear interest at 8% per annum and the Supplier may terminate.", None),
+    ("advance_bond_pct", "10% with order against an advance payment guarantee and 5% at PAC.", None),
+    ("performance_bond_pct", "Performance guarantee: the losses shall not exceed the guaranteed value by more "
+                             "than 5%.", None),
+    ("performance_bond_pct", "The performance bond of 10% shall be reduced to 5% at delivery.", 10.0),
+    ("ld_triggers", "LDs apply for late delivery; delays to PAC caused by the Buyer are excluded.", ("delivery",)),
+    ("ld_triggers", "LDs are not applicable to late delivery.", None),
+]
+
+
+@pytest.mark.parametrize("name, quote, expected", NOT_A_VALUE)
+def test_a_reader_does_not_guess(name, quote, expected):
+    f = next(f for p in CONTRACT_PARAMETERS for f in p.fields if f.name == name)
+    value = parse_field(f.kind, quote, f.name)
+    if expected is None:
+        assert value is None, value
+    else:
+        assert value is not None and value.value == expected, value
+
+
 def test_better_is_the_buyers_side():
     # Title passing earlier and lower termination fees are better: both are "at most" checks.
     assert field("CT-09", "title_event").operator == "le"
