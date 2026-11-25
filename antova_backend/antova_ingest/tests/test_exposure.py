@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 
 import antova_engine as engine
-from antova_ingest.exposure import delay_cost, ld_recovery_shortfall, liability_shortfall
+from antova_ingest.exposure import (back_to_back_ld_gap, delay_cost, ld_recovery_shortfall, liability_back_to_back,
+                                    liability_shortfall)
 from antova_ingest.pipeline import run_ingest
 from antova_ingest.tests.fakes import AnswerKeyLocator
 from samples import mutate
@@ -147,3 +148,50 @@ def test_a_vendors_true_price_adds_the_priced_exclusions_and_stays_a_lower_bound
     assert b["total_adders_low"] <= b["total_adders"] <= b["total_adders_high"]
     assert b["true_evaluated_low"] <= b["true_evaluated_price"] <= b["true_evaluated_high"]
     assert b["price_status"] == "UNPRICED_ITEMS"  # delivery, LD, liability and altitude gaps are still unpriced
+
+
+# --- back-to-back with the owner contract (Task 6) ------------------------------------------------------
+
+# Owner: EUR 10,000 a day, capped at EUR 1,000,000, all of it carried by this package.
+# Vendor: 0.5% of a EUR 2,000,000 order a day, capped at 10% (EUR 200,000).
+
+def _b2b(days, vendor_rate=(D("0.5"), "day"), share=D("100"), **kw):
+    return back_to_back_ld_gap(D("10000"), D("1000000"), share, vendor_rate, D("10"), D("2000000"), days, **kw)
+
+
+def test_back_to_back_gap():
+    e = _b2b(D("28"))
+    assert (e.kind, e.amount) == ("back_to_back_ld", D("80000.00"))  # 280,000 owed − 200,000 at the vendor's cap
+    assert "EUR 280,000.00" in e.formula and "EUR 200,000.00" in e.formula
+
+
+def test_back_to_back_true_zero():
+    assert _b2b(D("14")).amount == D("0.00")  # 140,000 owed, 140,000 paid back
+
+
+def test_back_to_back_weekly_rate():
+    weekly = _b2b(D("28"), vendor_rate=(D("3.5"), "week"))
+    assert weekly.amount == _b2b(D("28")).amount and "28/7" in weekly.formula
+
+
+def test_back_to_back_share_missing():
+    e = _b2b(D("28"), share=None)
+    assert e.amount is None and "share of owner LDs" in e.reason
+
+
+def test_back_to_back_shows_the_delay_in_weeks():
+    assert "4 weeks × 7 = 28 days" in _b2b(D("28"), delay_weeks=D("4")).formula
+
+
+def test_back_to_back_any_missing_input_is_none():
+    assert back_to_back_ld_gap(None, D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1")).amount is None
+    assert back_to_back_ld_gap(D("1"), D("1"), D("100"), None, D("10"), D("1"), D("1")).amount is None
+    assert "delay" in back_to_back_ld_gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), None).reason
+
+
+def test_liability_back_to_back():
+    e = liability_back_to_back(D("500000"), D("10"), D("2000000"))
+    assert (e.kind, e.amount) == ("back_to_back_liability", D("300000.00"))
+    assert liability_back_to_back(D("500000"), D("30"), D("2000000")).amount == D("0.00")
+    assert liability_back_to_back(D("500000"), 12.5, D("2000000")).amount == D("250000.00")  # float percent read exactly
+    assert liability_back_to_back(D("500000"), None, D("2000000")).amount is None
