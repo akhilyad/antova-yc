@@ -237,10 +237,11 @@ def deviation_classes(param: ParameterDef, failing_fields: set[str], governing: 
     for f in param.fields:
         if f.name not in failing_fields:
             continue
-        if f.name in incomparable and citation_only(f):
-            # A citation-only field (values.CITATION_ONLY) is compared by hand: no shortfall to price.
-            classes.append(f"{param.id}.{f.name}.compare_by_hand")
-        elif f.name in incomparable:
+        if citation_only(f):
+            # A citation-only field (values.CITATION_ONLY) is compared by hand: it is not a deviation and has
+            # no class, so it neither prices nor unprices a cell whose other fields deviate.
+            continue
+        if f.name in incomparable:
             # Two warranty start points with no stated gap between them: no shortfall to price.
             classes.append(f"{param.id}.warranty_basis_unresolved")
         elif f.kind == "incoterm":

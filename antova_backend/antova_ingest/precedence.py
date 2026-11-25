@@ -147,6 +147,7 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
 
     checks: list[CheckResult] = []
     failing_fields: list[FieldDef] = []
+    cited_only: list[FieldDef] = []  # quoted, never compared (values.CITATION_ONLY)
     for f in param.fields:
         if f.name in requirement and f.name in governing:
             value, citation = governing[f.name]
@@ -158,11 +159,13 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
             )
             if f.kind == "months":
                 _warranty_check(result, requirement[f.name], value, lag, warranty_policy, flags)
-            if citation_only(f):
-                # Ruling R18: quoted, never compared. Not comparable, so not passed; nothing to price.
-                result.comparable = False
             checks.append(result)
-            if not result.passed:
+            if citation_only(f):
+                # Ruling R18: quoted, never compared. Not comparable, so not passed; and not a deviation either
+                # (ruling R19): a person compares the quoted clauses, so on its own it asks for inspection.
+                result.comparable = False
+                cited_only.append(f)
+            elif not result.passed:
                 failing_fields.append(f)
 
     primary: Citation | None = None
@@ -182,7 +185,7 @@ def resolve(param: ParameterDef, requirement: dict[str, FieldValue], evidence: l
         status = ComplianceStatus.CONFLICT_DOWNGRADE
     elif failing_fields:
         status = ComplianceStatus.DEVIATION_DOWNGRADE
-    elif any(f.name in requirement and f.name not in governing for f in param.fields) or not governing:
+    elif any(f.name in requirement and f.name not in governing for f in param.fields) or not governing or cited_only:
         status = ComplianceStatus.MANUAL_INSPECTION_REQUIRED
     else:
         status = ComplianceStatus.COMPLIANT

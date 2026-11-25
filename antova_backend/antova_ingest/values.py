@@ -1757,7 +1757,20 @@ def rule_text(param: ParameterDef, requirement: dict[str, FieldValue]) -> str:
     return " AND ".join(parts)
 
 
+# A citation-only clause that already shows another field's value: the named place's clause states the
+# Incoterm ("DAP Rotterdam, Incoterms 2020."), so the Incoterm is not shown again ahead of it.
+_SHOWN_IN_CLAUSE = {"named_place": ("incoterm",)}
+
+
 def display_text(param: ParameterDef, values: dict[str, FieldValue]) -> str:
-    return param.display_template.format(
-        **{f.name: values[f.name].display if f.name in values else "—" for f in param.fields}
-    )
+    shown = {f.name: values[f.name].display if f.name in values else "—" for f in param.fields}
+    hidden = False
+    for clause_field, others in _SHOWN_IN_CLAUSE.items():
+        if clause_field not in values or clause_field not in shown:
+            continue
+        for other in others:
+            # Left out only when the clause states that very value; a different Incoterm stays visible.
+            if other in values and re.search(rf"\b{re.escape(values[other].display)}\b", values[clause_field].display):
+                shown[other], hidden = "", True
+    text = param.display_template.format(**shown)
+    return text.strip() if hidden else text

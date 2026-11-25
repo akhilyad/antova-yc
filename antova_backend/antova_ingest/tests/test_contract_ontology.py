@@ -15,7 +15,8 @@ from antova_ingest.tests.fakes import PACK
 from antova_ingest.precedence import resolve
 from antova_ingest.types import Citation, Evidence, FieldKind, FieldValue
 from antova_ingest.values import (
-    CITATION_ONLY, NOT_COMPARABLE, check, citation_only, parse_field, plausible, plausible_bounds, value_in_span,
+    CITATION_ONLY, NOT_COMPARABLE, check, citation_only, display_text, parse_field, plausible, plausible_bounds,
+    value_in_span,
 )
 
 CLASSES = tuple(ontology.PARAMETERS_BY_CLASS)
@@ -491,15 +492,58 @@ def test_a_citation_only_field_is_never_compared(param_id, name, required, offer
     _, off, evidence = _cited(param_id, name, offered, 2)
     # values.check: not passed, and the text says to compare by hand (equal clauses too: no comparison runs).
     assert check(f, req, off) == (False, NOT_COMPARABLE)
-    # The resolution records it as not comparable, so it neither passes nor counts as a priced shortfall.
+    # The resolution records it as not comparable: not passed, and (ruling R19) not a deviation either. On its
+    # own it asks a person to compare the clauses.
     resolution = resolve(CONTRACT_PARAMS_BY_ID[param_id], {name: req}, [evidence], "V1")
     (result,) = [c for c in resolution.checks if c.field == name]
     assert result.comparable is False and result.passed is False
     assert result.offered_canonical == "compare the quoted clauses by hand"
     assert result.offered == off.display
-    assert resolution.status != ComplianceStatus.COMPLIANT
+    assert resolution.status == ComplianceStatus.MANUAL_INSPECTION_REQUIRED
+    assert resolution.primary == evidence.citation
+    # It has no deviation class, so it neither prices nor unprices a cell.
     assert costs.deviation_classes(CONTRACT_PARAMS_BY_ID[param_id], {name}, {name: off}, {name: req},
-                                   frozenset({name})) == [f"{param_id}.{name}.compare_by_hand"]
+                                   frozenset({name})) == []
+
+
+def _ct12(quote, page=1):
+    values = {f.name: parse_field(f.kind, quote, f.name) for f in CONTRACT_PARAMS_BY_ID["CT-12"].fields}
+    return values, Evidence("CT-12", Citation("bid.pdf", page, (0.0, 0.0, 1.0, 1.0), quote, "commercial"), values)
+
+
+def test_a_citation_only_field_beside_a_passing_field_asks_for_inspection():
+    required, _ = _ct12("Delivery DAP Rotterdam, Incoterms 2020.")
+    _, evidence = _ct12("Delivery DDP Rotterdam, Incoterms 2020.")
+    resolution = resolve(CONTRACT_PARAMS_BY_ID["CT-12"], required, [evidence], "V1")
+    by_field = {c.field: c for c in resolution.checks}
+    assert by_field["incoterm"].passed and by_field["incoterm"].comparable
+    assert resolution.status == ComplianceStatus.MANUAL_INSPECTION_REQUIRED
+
+
+def test_a_genuine_failure_beside_a_citation_only_field_stays_a_deviation():
+    required, _ = _ct12("Delivery DAP Rotterdam, Incoterms 2020.")
+    offered, evidence = _ct12("Delivery EXW Seller's works, Incoterms 2020.")
+    param = CONTRACT_PARAMS_BY_ID["CT-12"]
+    resolution = resolve(param, required, [evidence], "V1")
+    by_field = {c.field: c for c in resolution.checks}
+    assert not by_field["incoterm"].passed and by_field["incoterm"].comparable
+    assert not by_field["named_place"].comparable
+    assert resolution.status == ComplianceStatus.DEVIATION_DOWNGRADE
+    # Priced by the Incoterm alone; the quoted place adds no class.
+    failing = {c.field for c in resolution.checks if not c.passed}
+    incomparable = frozenset(c.field for c in resolution.checks if not c.comparable)
+    assert costs.deviation_classes(param, failing, offered, required, incomparable) == ["CT-12.incoterm_exw_to_dap"]
+
+
+def test_the_named_place_display_does_not_repeat_the_incoterm():
+    param = CONTRACT_PARAMS_BY_ID["CT-12"]
+    values, _ = _ct12("Delivery DAP Rotterdam, Incoterms 2020.")
+    assert display_text(param, values) == "Delivery DAP Rotterdam, Incoterms 2020."
+    # An Incoterm the clause does not state stays visible ahead of it.
+    other = {"incoterm": parse_field("incoterm", "FCA", "incoterm"), "named_place": values["named_place"]}
+    assert display_text(param, other) == "FCA Delivery DAP Rotterdam, Incoterms 2020."
+    assert display_text(param, {"incoterm": values["incoterm"]}) == "DAP —"
+    assert display_text(param, {"named_place": values["named_place"]}) == "— Delivery DAP Rotterdam, Incoterms 2020."
 
 
 def test_better_is_the_buyers_side():
