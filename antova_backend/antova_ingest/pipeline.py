@@ -6,6 +6,7 @@ in one transaction.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -20,9 +21,10 @@ from typing import Callable
 import anthropic
 
 import antova_engine as engine
-from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
+from antova_ingest import artifacts, codec, config, contract_findings, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
 from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID, CONTRACT_ROLES
+from antova_ingest.contract_terms import contract_evidence
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
 from antova_ingest.ontology import (
@@ -803,7 +805,7 @@ def stage_leveled(bodies: dict) -> dict:
     resolutions = {k: codec.resolution_from_plain(v) for k, v in bodies["checked"]["resolutions"].items()}
     pricings = {k: codec.pricing_from_plain(v) for k, v in bodies["priced"]["pricings"].items()}
     table = bodies["priced"]["rate_table"]
-    warnings = [w for stage in STAGE_NAMES[:-1] for w in bodies[stage]["warnings"]]
+    warnings = [w for stage in STAGE_NAMES[:STAGE_NAMES.index("leveled")] for w in bodies[stage]["warnings"]]
 
     every_call = [*located["outcomes"].values(), *located.get("contract_outcomes", {}).values()]
     input_tokens = sum(o["input_tokens"] for o in every_call)
@@ -920,11 +922,37 @@ def stage_leveled(bodies: dict) -> dict:
     return {"tender": tender.model_dump(mode="json"), "stats": stats, "warnings": []}
 
 
+def stage_contracted(bodies: dict) -> dict:
+    """The contract terms, their checks and gaps, the budget lines and the contract findings, per vendor.
+
+    Runs after "leveled" and reads the earlier stages only, so it never changes them: contract evidence stays
+    out of the equipment stages (R20). A tender that does not go to contract approval (needs_contract_pass)
+    gets the empty body. The true job cost is the leveled stage's true evaluated price; a lower bound (some
+    gap unpriced) or no headline is not known.
+    """
+    manifest = _manifest(bodies)
+    if not needs_contract_pass(manifest):
+        return copy.deepcopy(contract_findings.EMPTY_BODY)
+    evidence, _notes = contract_evidence(bodies["verified"], manifest, _failed_vendors(bodies, manifest))
+    prices = {}
+    for vendor_id, head in bodies["resolved"]["headlines"].items():
+        citation = head["citation"]
+        prices[vendor_id] = (read_price(citation["quote"]) if citation else None,
+                             Citation.from_dict(citation) if citation else None)
+    tender = engine.TenderPackage.model_validate(bodies["leveled"]["tender"])
+    true_job_costs = {}
+    for f in engine.evaluate_vendor_financials(tender, engine.SensitivitySettings(), []):
+        known = f["price_status"] == "PRICED" and f["true_evaluated_price"] is not None
+        true_job_costs[f["vendor_id"]] = ((Decimal(str(f["true_evaluated_price"])), f["currency"]) if known
+                                          else (None, None))
+    return contract_findings.assess(manifest, evidence, prices, true_job_costs)
+
+
 _STAGE_FUNCTIONS: dict[str, Callable[[dict], dict]] = {
     "verified": stage_verified, "resolved": stage_resolved, "checked": stage_checked,
-    "priced": stage_priced, "leveled": stage_leveled,
+    "priced": stage_priced, "leveled": stage_leveled, "contracted": stage_contracted,
 }
-# The progress label reported when each stage finishes (the leveled stage has none).
+# The progress label reported when each stage finishes (the leveled and contracted stages have none).
 _STAGE_PROGRESS = dict(zip(STAGE_NAMES, STAGES[1:]))
 
 

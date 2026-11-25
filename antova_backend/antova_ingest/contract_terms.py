@@ -63,6 +63,7 @@ class ContractTerm:
     state: State
     # precedence.flag(code, message) dicts. A flag about one field also carries "field" (the field name) and
     # "source" ("offered", "fa" or "owner"), so a reader matches on those keys, never on the message (ruling R27).
+    # A "document_not_read" flag carries "file" and "role" (the manifest role of the document not read).
     flags: tuple[dict, ...]
     # An FA (as amended) is linked to the vendor's counterparty, even if it is silent on this term or was
     # not read (ruling R26). False: no framework agreement for this vendor.
@@ -316,8 +317,9 @@ def resolve_contract_terms(manifest: TenderManifest,
                      f"so no framework agreement is linked.")
         for d in [*bids, *fa_docs, *owner_docs]:
             if d.file not in evidence:
-                add_flag(vendor_flags, "document_not_read",
-                         f"{d.file} was not read, so the terms it states are unknown.")
+                # "file" and "role" say which document, so a reader matches on keys, never the message (R27).
+                _add(vendor_flags, {**flag("document_not_read", f"{d.file} was not read, so the terms it states "
+                                                                f"are unknown."), "file": d.file, "role": d.role})
         offer_read = all(d.file in evidence for d in bids)
         fa_read = bool(fa_docs) and all(d.file in evidence for d in fa_docs)
         # The offer's own clause decides; a disclaimer in it wins over the agreement's call-off clause.

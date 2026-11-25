@@ -43,7 +43,7 @@ def test_canonical_json_is_sorted_and_writes_decimals_as_strings():
 
 def test_every_stage_has_a_hashed_json_artifact(result):
     assert list(result.artifacts) == list(artifacts.STAGE_NAMES) == [
-        "parsed", "located", "verified", "resolved", "checked", "priced", "leveled"]
+        "parsed", "located", "verified", "resolved", "checked", "priced", "leveled", "contracted"]
     for stage, artifact in result.artifacts.items():
         assert artifact.stage == stage
         assert artifact.sha256 == artifacts.sha256_text(artifact.body)

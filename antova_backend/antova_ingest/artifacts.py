@@ -25,7 +25,9 @@ from typing import Any
 import antova_ingest
 from antova_ingest import config, contract_ontology, extract, ontology
 
-STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled")
+# "contracted" runs after "leveled": the contract terms, checks and findings; empty for a tender without contract
+# documents, owner terms or a frozen budget (pipeline.needs_contract_pass).
+STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled", "contracted")
 # The modules that hold deterministic rules: a change to any of them changes the fingerprint.
 RULE_MODULES = ("parse.py", "values.py", "precedence.py", "costs.py", "sweep.py", "pipeline.py", "clarify.py")
 _PACKAGE_DIR = Path(__file__).resolve().parent
