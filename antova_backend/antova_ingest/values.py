@@ -602,10 +602,14 @@ _CAP_AFTER = re.compile(r"^\s*(?:of\s+[^.;,]{0,40}?\s+)?(?:maximum|cap\b|in\s+to
 _LD_CONTEXT = re.compile(r"liquidated|\bLDs?\b|delay\s+damages|late\s+delivery|penalt", re.IGNORECASE)
 _LIABILITY_CONTEXT = re.compile(r"liabilit", re.IGNORECASE)
 # "Without prejudice to …" is not an exclusion, nor is an "excludes …" whose object is not LDs ("The price
-# excludes taxes and liquidated damages are 0.5% per day"; Task 6 review r5).
+# excludes taxes and liquidated damages are 0.5% per day"; Task 6 review r5): there "liquidated damages" has its
+# own predicate. An exclusion coordinated with other losses ("We exclude consequential losses and liquidated
+# damages.") is one (ruling R31); ld_exclusion classifies it "other".
+_LD_OWN_PREDICATE = (r"(?!\s+damages?\b(?:\s*\(\s*(?:the\s+)?LDs?\s*\))?\s+"
+                     r"(?:are|is|shall|will|apply|applies|amount|amounts)\b)")
 NO_LD = re.compile(
     r"\b(?:no|without(?!\s+prejudice)|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
-    r"\bexclude[sd]?\b(?:(?!\b(?:and|or)\b|&)[^.;]){0,40}liquidated|"
+    r"\bexclude[sd]?\b[^.;]{0,40}liquidated" + _LD_OWN_PREDICATE + r"|"
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
     r"\bno\s+LDs?\b|\bLDs?\s+(?:(?:are|is|shall\s+be|will\s+be)\s+)?(?:excluded|waived|not\s+applicable)|"
     r"\bLDs?\s+(?:do(?:es)?|shall|will)\s+not\s+apply", re.IGNORECASE)

@@ -582,3 +582,21 @@ def test_a_scope_inside_the_exclusion_beside_a_rate_gives_no_number(sentence):
 def test_wording_that_does_not_exclude_lds_keeps_the_gap(quote):
     gap = _gap(quote)
     assert gap.amount == D("80000.00") and "assumes" not in gap.formula
+
+
+# --- a coordinated exclusion in its own passage (ruling R31) ------------------------------------------------
+
+def test_a_coordinated_exclusion_is_kept_and_gives_no_number():
+    exclusion = "We exclude consequential losses and liquidated damages."
+    term = _pipeline_ct01((9, LD_RATE_CAP), (12, exclusion))
+    assert [c.quote for c in term.ld_exclusion_passages] == [exclusion]
+    gap = back_to_back_ld(term, OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None
+    assert gap.reason == f"the offer limits its liquidated damages ('{exclusion}'); check the scope by hand"
+
+
+def test_a_coordinated_exclusion_alone_is_never_a_number():
+    term = _pipeline_ct01((12, "We exclude consequential losses and liquidated damages."))
+    assert term.offered is None and len(term.ld_exclusion_passages) == 1
+    gap = back_to_back_ld(term, OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None and gap.reason == "not known: the vendor's LD rate, the vendor's LD cap"

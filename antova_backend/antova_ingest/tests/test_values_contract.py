@@ -564,3 +564,25 @@ def test_wording_that_does_not_exclude_lds_is_not_an_exclusion(quote):
     assert parse_field("rate_per_period", quote, "ld_rate").value == (Decimal("0.5"), "day")
     cap = parse_field("percent", quote, "ld_cap")
     assert (cap.value, cap.qualifier) == (10.0, "contract")
+
+
+# --- a coordinated exclusion (ruling R31) ---------------------------------------------------------------
+
+COORDINATED = "We exclude consequential losses and liquidated damages."
+
+
+@pytest.mark.parametrize("sentence", [COORDINATED, "The Supplier excludes indirect loss or liquidated damages.",
+                                      "We exclude lost profit & liquidated damages."])
+def test_an_exclusion_coordinated_with_other_losses_is_an_exclusion_of_other_scope(sentence):
+    (found,) = ld_exclusions(sentence)
+    assert found.scope == "other"
+    assert no_lds(sentence) is False
+
+
+@pytest.mark.parametrize("quote", [
+    "The price excludes taxes and liquidated damages are 0.5% per day, capped at 10% of the order value.",
+    "The price excludes taxes and liquidated damages shall be 0.5% per day, capped at 10% of the order value.",
+    "The price excludes taxes, and liquidated damages (LDs) apply at 0.5% per day, capped at 10% of the order value.",
+])
+def test_liquidated_damages_with_their_own_predicate_are_not_excluded(quote):
+    assert ld_exclusions(quote) == [] and no_lds(quote) is False
