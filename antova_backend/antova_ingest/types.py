@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_serializer, model_validator,
+)
 
 from antova_engine import ComplianceStatus, Criticality, TenderPackage  # noqa: F401
 
@@ -24,12 +26,45 @@ FieldKind = Literal[
 ]
 
 
+DocumentRole = Literal["mr_spec", "vendor_bid", "framework_agreement", "owner_contract"]
+# Fields added with the contract roles: left out of a dump when unset, so a stored manifest that
+# predates them is stored exactly as before.
+_CONTRACT_ENTRY_FIELDS = ("counterparty_id", "amends", "dated")
+
+
 class DocumentEntry(BaseModel):
     file: str
-    role: Literal["mr_spec", "vendor_bid"]
+    role: DocumentRole
     vendor_id: str | None = None
     vendor_name: str | None = None
     country: str | None = None
+    # The vendor a framework agreement is with (a framework agreement has no vendor_id: it is not a bid).
+    counterparty_id: str | None = None
+    # The file name of the entry this one amends (same role and counterparty); the later one governs
+    # for the clauses it covers.
+    amends: str | None = None
+    dated: date | None = None
+
+    @model_validator(mode="after")
+    def _contract_role_owners(self):
+        if self.role == "framework_agreement":
+            if not self.counterparty_id:
+                raise ValueError(f"{self.file}: a framework_agreement needs counterparty_id")
+            if self.vendor_id is not None:
+                raise ValueError(f"{self.file}: a framework_agreement takes counterparty_id, not vendor_id")
+        if self.role == "owner_contract":
+            for name in ("vendor_id", "counterparty_id"):
+                if getattr(self, name) is not None:
+                    raise ValueError(f"{self.file}: an owner_contract is the project's; it has no {name}")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_contract_fields(self, handler):
+        data = handler(self)
+        for name in _CONTRACT_ENTRY_FIELDS:
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
 
 
 class BaselineDate(BaseModel):
@@ -48,6 +83,54 @@ class BaselineNumber(BaseModel):
     note: str | None = None
 
 
+Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]  # ISO 4217 code, upper case
+
+
+class BaselineMoney(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Decimal
+    currency: Currency
+    source: Literal["buyer_entered"] = "buyer_entered"
+    note: str | None = None
+
+
+class BaselineFx(BaseModel):
+    """A conversion rate the buyer entered, with its date: 1 from_currency = rate to_currency.
+    Antova never fetches or assumes a rate."""
+    model_config = ConfigDict(extra="forbid")
+    from_currency: Currency
+    to_currency: Currency
+    rate: Decimal = Field(gt=0)
+    dated: date
+    source: Literal["buyer_entered"] = "buyer_entered"
+
+
+class OwnerTerms(BaseModel):
+    """The owner contract's pass-down terms, entered by the buyer instead of read from a PDF.
+    Each one unknown is None (never 0)."""
+    model_config = ConfigDict(extra="forbid")
+    contract_value: BaselineMoney | None = None
+    ld_rate: Decimal | None = None
+    ld_rate_basis: Literal["percent_per_day", "percent_per_week", "money_per_day", "money_per_week"] | None = None
+    ld_cap: Decimal | None = None
+    ld_cap_basis: Literal["percent", "money"] | None = None
+    # The share of the owner's LDs this package carries, in percent.
+    package_ld_share_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    liability_cap: BaselineMoney | None = None
+    warranty_months: int | None = None
+    warranty_start: str | None = None  # a project event, ontology.ORDINALS["event"]
+    law: str | None = None
+    source: Literal["buyer_entered"] = "buyer_entered"
+
+    @field_validator("warranty_start")
+    @classmethod
+    def _known_event(cls, value):
+        from antova_ingest.ontology import ORDINALS  # ontology imports this module
+        if value is not None and value not in ORDINALS["event"]:
+            raise ValueError(f"warranty_start must be one of {', '.join(ORDINALS['event'])}")
+        return value
+
+
 class ProjectBaseline(BaseModel):
     """What the project needs, as the buyer states it. Every field is optional: an audit that
     needs one it does not have says so (it never assumes a date)."""
@@ -57,6 +140,13 @@ class ProjectBaseline(BaseModel):
     energization_date: BaselineDate | None = None
     site_altitude_m: BaselineNumber | None = None
     site_max_ambient_c: BaselineNumber | None = None
+    frozen_budget: BaselineMoney | None = None
+    fx: list[BaselineFx] = []
+    delay_scenario_days: BaselineNumber | None = None
+    owner_terms: OwnerTerms | None = None
+    procurement_negotiated: bool | None = None
+    signing_before_ntp: bool | None = None
+    project_id: str | None = None
 
     @model_validator(mode="after")
     def _dates_in_order(self):
@@ -67,9 +157,19 @@ class ProjectBaseline(BaseModel):
             raise ValueError("site_altitude_m must be between -500 and 6000")
         return self
 
+    @model_serializer(mode="wrap")
+    def _omit_empty_fx(self, handler):
+        # No rates is left out, as an unset field is, so a baseline with only the old fields
+        # dumps as before and gets no review item for an empty list.
+        data = handler(self)
+        if not data.get("fx", True):
+            del data["fx"]
+        return data
+
 
 PROJECT_FIELDS = ("po_award_date", "required_on_site_date", "energization_date",
-                  "site_altitude_m", "site_max_ambient_c")
+                  "site_altitude_m", "site_max_ambient_c", "frozen_budget", "fx", "delay_scenario_days",
+                  "owner_terms", "procurement_negotiated", "signing_before_ntp", "project_id")
 
 
 class TenderManifest(BaseModel):
@@ -82,6 +182,19 @@ class TenderManifest(BaseModel):
     engineering_estimates: dict[str, Decimal]
     synthetic: bool = False
     project: ProjectBaseline | None = None
+
+    @model_validator(mode="after")
+    def _amendments_name_their_document(self):
+        by_file = {d.file: d for d in self.documents}
+        for d in self.documents:
+            if d.amends is None:
+                continue
+            target = by_file.get(d.amends)
+            if target is None or target is d:
+                raise ValueError(f"{d.file}: amends {d.amends!r}, which is not another document in the manifest")
+            if (target.role, target.counterparty_id) != (d.role, d.counterparty_id):
+                raise ValueError(f"{d.file}: amends {d.amends!r}, which is not a {d.role} with the same counterparty")
+        return self
 
 
 @dataclass(frozen=True)
