@@ -78,12 +78,13 @@ def price_basis(term_ct13: ContractTerm | None, headline: PriceRead | None) -> P
 def _variable_parts(values: dict) -> tuple[str, ...]:
     price_type = values.get("price_type")
     fixed = values.get("price_fixed_after_ntp")
-    moves = (price_type is not None and price_type.value in _NOT_FIXED_TYPES) or (fixed is not None and fixed.value == 0)
-    if not moves:
+    type_moves = price_type is not None and price_type.value in _NOT_FIXED_TYPES
+    if not type_moves and not (fixed is not None and fixed.value == 0):
         return ()  # the escalation field also records "fixed and firm" clauses: not a variable part
     if "escalation_formula" in values:
         return (values["escalation_formula"].display,)
-    said = price_type.display if price_type is not None else fixed.display
+    # Name what makes the price move: a lump sum that is not fixed after NTP moves for that reason, not its type.
+    said = price_type.display if type_moves else fixed.display
     return (f"the price is {said}; no escalation clause is quoted",)
 
 

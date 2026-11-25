@@ -198,3 +198,29 @@ def test_price_basis_unit_rate_is_not_a_lump_sum():
 
 def test_price_basis_with_nothing_known():
     assert price_basis(None, None) == PriceBasis(None, None, (), (), ())
+
+
+def _ct13_values(**values):
+    from antova_ingest.types import FieldValue
+    shown = {"price_type": {"fixed_lump_sum": "fixed lump sum", "variable": "variable"},
+             "price_fixed_after_ntp": {0: "not fixed after NTP", 1: "fixed after NTP"}}
+    fields = {name: FieldValue("scope", v, shown[name][v]) for name, v in values.items()}
+    return ContractTerm("CT-13", "vendor-a", TermSource("document", fields, (_cite(),)), None, None, "cited", (),
+                        fa_present=False)
+
+
+def test_a_lump_sum_not_fixed_after_ntp_names_the_ntp_not_the_lump_sum():
+    # Task 7 carry: the price moves because it is not fixed after NTP, so the note says that, never "fixed lump sum".
+    term = _ct13_values(price_type="fixed_lump_sum", price_fixed_after_ntp=0)
+    basis = price_basis(term, PriceRead(D("2000000"), "GBP", None))
+    assert basis.variable == ("the price is not fixed after NTP; no escalation clause is quoted",)
+    offered = _lines(budget_lines(basis, None, None, None, []))["offered"]
+    assert "not summed: the price is not fixed after NTP" in offered.formula
+    assert "fixed lump sum" not in offered.formula
+
+
+def test_a_variable_price_with_no_escalation_clause_says_so():
+    basis = price_basis(_ct13_values(price_type="variable"), PriceRead(D("2000000"), "GBP", None))
+    assert basis.variable == ("the price is variable; no escalation clause is quoted",)
+    both = price_basis(_ct13_values(price_type="variable", price_fixed_after_ntp=0), PriceRead(D("2000000"), "GBP", None))
+    assert both.variable == ("the price is variable; no escalation clause is quoted",)
