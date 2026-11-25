@@ -8,6 +8,10 @@ ontology: a field passes when the offered value is at least as good as the requi
 Plausible ranges are written like values in a contract, as in ontology.py. A design life is held in
 months, so 10 to 50 years is 120 to 600 months; values.py reads "35 years" as 420 months and shows both.
 An NTP deadline written in days is restated in months (days x 12 / 365), also shown.
+
+Three fields are citation-only in v1 (values.CITATION_ONLY, ruling R18): named_place, escalation_formula
+and liability_exclusions. Their value is the quoted clause; they are never compared, and a reviewer
+compares the quoted clauses by hand.
 """
 
 from __future__ import annotations

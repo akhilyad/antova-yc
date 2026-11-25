@@ -23,6 +23,7 @@ from antova_engine import ComplianceStatus, CostLine
 from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, FieldDef, ParameterDef
 from antova_ingest.parse import RATE_TABLE_PATTERN, RATES_DIR
 from antova_ingest.types import FieldValue, Resolution
+from antova_ingest.values import citation_only
 
 CENTS = Decimal("0.01")
 DRIVERS = ("fixed", "copper", "labour", "freight")
@@ -236,7 +237,10 @@ def deviation_classes(param: ParameterDef, failing_fields: set[str], governing: 
     for f in param.fields:
         if f.name not in failing_fields:
             continue
-        if f.name in incomparable:
+        if f.name in incomparable and citation_only(f):
+            # A citation-only field (values.CITATION_ONLY) is compared by hand: no shortfall to price.
+            classes.append(f"{param.id}.{f.name}.compare_by_hand")
+        elif f.name in incomparable:
             # Two warranty start points with no stated gap between them: no shortfall to price.
             classes.append(f"{param.id}.warranty_basis_unresolved")
         elif f.kind == "incoterm":

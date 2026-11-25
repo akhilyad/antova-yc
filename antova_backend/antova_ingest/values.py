@@ -1088,7 +1088,8 @@ _SCOPE_OUT = re.compile(r"\b(?:excluded|exclude[sd]?|not included|not part of|no
 
 
 # --- Contract-term scope fields (contract_ontology). Each is read to a normalized value from its usual
-# wording, or None. A tuple value is compared as a set by check(); the event and document codes in it are
+# wording, or None; the citation-only fields (CITATION_ONLY, below) are recorded as quoted instead. A tuple
+# value is compared as a set by check(); the event and document codes in it are
 # in a fixed order, so two equal sets give equal tuples.
 
 def _flat(quote: str) -> str:
@@ -1285,93 +1286,41 @@ def _warranty_coverage(quote: str) -> FieldValue | None:
     return None
 
 
-_LIABILITY_EXCLUSIONS = (
-    ("gross_negligence", "gross negligence", r"\bgross(?:ly)?\s+neglig"),
-    ("wilful_misconduct", "wilful misconduct", r"\bwil+ful\s+(?:misconduct|default)|\bintentional|\bdeliberate"),
-    ("fraud", "fraud", r"\bfraud"),
-    ("death_or_injury", "death or personal injury", r"\bdeath\b|\b(?:personal|bodily)\s+injur"),
-    ("ip_infringement", "IP infringement", r"intellectual\s+property|\binfring"),
-    ("confidentiality", "confidentiality", r"\bconfidential"),
-    ("third_party_claims", "third-party claims", r"\bthird[- ]part(?:y|ies)"),
-    ("liquidated_damages", "liquidated damages", r"\bliquidated\s+damages|(?-i:\bLDs?\b)"),
-)
-# A carve-out from the cap: the limit does not apply to these. Not "the Supplier excludes all liability for
-# third-party claims", which is the opposite (no liability at all), so a bare "excludes" is not one.
-_CARVE_OUT = re.compile(
-    r"\bshall\s+not\s+(?:apply|limit)|\bdo(?:es)?\s+not\s+(?:apply|limit)|\bexcept\b|\bsave\s+(?:for|in)\b|"
-    r"\bother\s+than\b|\bunlimited\b|\bnot\s+be\s+limited|\bexcluded\s+from\s+(?:the|this|any)\s+(?:cap|limit\w*)",
-    re.IGNORECASE)
-_THE_CAP = re.compile(r"\blimitation\b|\blimit(?:s|ed)?\b|\bcap(?:ped)?\b|\baggregate\b|\bmaximum\b", re.IGNORECASE)
-_NO_LIABILITY = re.compile(r"\bexclud\w*\s+(?:all\s+|any\s+)?liabilit|\bno\s+liabilit|\bnot\s+(?:be\s+)?liable",
-                           re.IGNORECASE)
+# --- Citation-only fields (ruling R18). Antova does not normalize or compare these in v1: the escalation
+# formula is quoted, not computed (spec 4.2), and a named place or a list of carve-outs from the liability
+# cap is read by a person from the quoted clause. The reader only records that the clause was found: its
+# value and display are the quote itself, whitespace collapsed, with no meaning read into it. check() never
+# passes or fails such a field; it is not comparable ("compare the quoted clauses by hand").
+CITATION_ONLY: frozenset[str] = frozenset({"named_place", "escalation_formula", "liability_exclusions"})
+NOT_COMPARABLE = "compare the quoted clauses by hand"
+
+# What a quote must be about to count as the clause for each field. Presence only: nothing here decides
+# what the clause says, so the worst it can do is leave a clause unrecorded (shown as missing).
+_CITATION_TOPIC = {
+    "named_place": re.compile(r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\b|ex[- ]works|delivered\s+at\s+place|"
+                              r"delivered\s+duty\s+paid|free\s+carrier"),
+    "escalation_formula": re.compile(r"escalat|adjust|index|formula|variation|\bfirm\b|\bfixed\b", re.IGNORECASE),
+    "liability_exclusions": re.compile(
+        r"^(?=.*liabilit)(?=.*(?:\bexcept|\bsave\b|\bother\s+than\b|\bnot\s+(?:apply|limit|be\s+limited)|"
+        r"\bunlimited\b|\bexclu|\bcarve))", re.IGNORECASE | re.DOTALL),
+}
 
 
-def _liability_exclusions(quote: str) -> FieldValue | None:
-    """What the liability cap does not limit: "shall not apply in case of gross negligence, wilful misconduct
-    or fraud" -> (gross_negligence, wilful_misconduct, fraud)."""
-    found = []
-    # Liability may be named in one clause and the carve-out in the next: "aggregate liability shall be limited
-    # to 100%; this limitation shall not apply in case of gross negligence". The quote names the liability once.
-    text = _flat(quote)
-    about_liability = bool(_LIABILITY_CONTEXT.search(text))
-    clauses = [c for s in split_sentences(text) for c in re.split(r";\s*", s)]
-    for sentence in clauses:
-        if _NO_LIABILITY.search(sentence):
-            continue  # a liability excluded outright ("not liable for indirect loss") is not a carve-out from the cap
-        if not (about_liability and _THE_CAP.search(sentence) and _CARVE_OUT.search(sentence)):
-            continue
-        found += [(code, shown) for code, shown, pattern in _LIABILITY_EXCLUSIONS
-                  if re.search(pattern, sentence, re.IGNORECASE) and code not in {c for c, _ in found}]
-    if not found:
-        return None
-    order = [code for code, _, _ in _LIABILITY_EXCLUSIONS]
-    found.sort(key=lambda item: order.index(item[0]))
-    return FieldValue("scope", tuple(c for c, _ in found), ", ".join(s for _, s in found))
+def citation_only(field: FieldDef) -> bool:
+    """Whether the field is only cited, never compared (CITATION_ONLY)."""
+    return field.name in CITATION_ONLY
 
 
-_INCOTERM_CODE = re.compile(r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\b")
-_INCOTERMS_EDITION = r"(?:ICC\s+)?Incoterms(?:®)?(?:\s+\d{4})?"
-# Before the place, an edition or "named place" may stand ("FCA, Incoterms 2020, named place Hamburg").
-_PLACE_LEAD = re.compile(r"[\s,:]*(?:" + _INCOTERMS_EDITION + r"[\s,:]*)?(?:named\s+place\b[\s,:]*)?", re.IGNORECASE)
-# The place ends at a hard stop: the edition, a bracket, ";", "per / according to / in accordance with", the
-# end of the sentence, or "including / excluding" (never part of a place name).
-_PLACE_END = re.compile(
-    r"\s*(?:\(|;|\b" + _INCOTERMS_EDITION + r"|\bper\b|\baccording\b|\bin\s+accordance\b|"
-    r",?\s+(?:including|incl\.|excluding|excl\.)(?=\s|$)|\.(?:\s|$)|$)", re.IGNORECASE)
-# Words that carry the sentence on. After a comma they end the place ("Site, as defined in Clause 1"); without
-# one the reader cannot tell them from a place name ("Bosnia and Herzegovina" has "and", "Site at the Buyer's
-# plant" has "at the"), so only these, which no place name has, are looked for, and then the place is None.
-_PLACE_CARRY_ON = re.compile(
-    r"(,)?\s+(?:where|which|whereby|with|as\s+(?:defined|per|stated|set\s+out)|unload\w*|offload\w*|loading|"
-    r"(?:at|on)\s+(?:the\s+)?(?:seller|buyer|supplier|purchaser)(?:'s|’s)?\s+(?:risk|cost|expense)|"
-    r"by\s+the\s+(?:seller|buyer|supplier|purchaser))\b", re.IGNORECASE)
-_PLACE_NOT_YET_NAMED = re.compile(r"\bto\s+be\s+(?:confirmed|named|determined|agreed|defined|advised|notified)\b",
-                                  re.IGNORECASE)
+def _quoted_clause(field_name: str):
+    topic = _CITATION_TOPIC[field_name]
 
-
-def _named_place(quote: str) -> FieldValue | None:
-    """The place named after the Incoterm: "DAP Site Rotterdam (Incoterms 2020)" -> "site rotterdam",
-    "FCA, Incoterms 2020, named place Hamburg" -> "hamburg", "DAP Bosnia and Herzegovina, Incoterms 2020" ->
-    "bosnia and herzegovina". A place still "to be confirmed" is None, and so is a place run on into the
-    rest of the sentence without a comma ("DAP Rotterdam where unloading is by the Buyer")."""
-    for sentence in split_sentences(_flat(quote)):
-        m = _INCOTERM_CODE.search(sentence)
-        if not m:
-            continue
-        start = _PLACE_LEAD.match(sentence, m.end()).end()
-        end = _PLACE_END.search(sentence, start)
-        place = sentence[start:end.start() if end else len(sentence)]
-        if _PLACE_NOT_YET_NAMED.search(place):
+    def read(quote: str) -> FieldValue | None:
+        text = re.sub(r"\s+", " ", quote).strip()
+        if not text or not topic.search(text):
             return None
-        carry = _PLACE_CARRY_ON.search(place)
-        if carry:
-            if not carry.group(1):
-                return None
-            place = place[:carry.start()]
-        shown = place.strip(" ,.:")
-        if shown and shown[0].isupper():
-            return FieldValue("scope", shown.lower(), shown)
-    return None
+        return FieldValue("scope", text, text)
+    read.__name__ = f"_{field_name}_clause"
+    return read
 
 
 _CURRENCY_NAMES = (
@@ -1448,64 +1397,6 @@ def _price_type(quote: str) -> FieldValue | None:
     return FieldValue("scope", code, _PRICE_TYPES[code])
 
 
-_NO_ESCALATION = re.compile(
-    r"\bno\s+(?:price\s+)?(?:escalation|adjustment|indexation)\b|"
-    r"\bnot\s+(?:be\s+)?subject\s+to\s+(?:any\s+)?(?:price\s+)?(?:escalation|adjustment|variation|indexation)\b|"
-    r"\bwithout\s+(?:any\s+)?(?:price\s+)?(?:escalation|adjustment)\b", re.IGNORECASE)
-_ESCALATION_WORD = re.compile(r"\b(?:escalat|adjust|indexat|variation)\w*", re.IGNORECASE)
-# A formula is the word or an equation ("P = P0 x ..."). A bare "index" is not one ("steel index of January").
-_FORMULA = re.compile(r"\bformula\b|\b[A-Z]\w{0,3}\s*=\s*\S", re.IGNORECASE)
-# Wording that removes a formula without a "not": "N/A", "excluding", "free of", "deleted", "waived".
-_REMOVED = re.compile(r"(?-i:(?<![\w/])N/?A(?![\w/]))|\bexclud\w*|\bfree\s+(?:of|from)\b|\bdelet\w*|\bwaived?\b|"
-                      r"\bremoved\b|\bstruck\b|\bnot\s+applicable\b|\bnil\b|\bshall\s+not\s+apply\b|\bdoes\s+not\s+apply\b",
-                      re.IGNORECASE)
-# "Escalation formula: N/A", "Price adjustment formula: none".
-_FORMULA_NOT_APPLICABLE = re.compile(r"\bformula\s*:\s*(?:(?-i:N/?A)|none|nil|not\s+applicable|deleted)\s*$",
-                                     re.IGNORECASE)
-# "No escalation applies before NTP": a limit in time, which says nothing about after it.
-_NO_ESCALATION_UNTIL = re.compile(r"\b(?:before|until|prior\s+to|up\s+to)\b", re.IGNORECASE)
-
-
-def _escalation_formula(quote: str) -> FieldValue | None:
-    """Whether the price has an escalation formula: "none", or "formula". The formula itself is quoted and
-    cited, not computed (spec 4.2, v1): only its presence is a value.
-
-    Read clause by clause (split at ". ", "; " and ", "):
-    - a negation or removal in the formula's own part of the clause ("not subject to any escalation formula",
-      "Escalation formula: N/A", "excluding / free of any escalation formula", "is deleted", "does not
-      apply") says none;
-    - a negation elsewhere in that clause ("The price is not fixed: it is adjusted per the formula") is not
-      scoped by this reader, so the answer is None;
-    - otherwise the formula counts when escalation or adjustment is stated in a clause that is not negated
-      ("subject to escalation; the formula is given in Annex 3"); it wins over a "no escalation" limited in time.
-    """
-    text = _ABBREVIATED_REF.sub("\\1\u2024", _flat(quote))  # "Annex No. 3" is not a "no"
-    clauses = re.split(r"[;.,]\s+|[;.]$", text)
-    escalates = any(_ESCALATION_WORD.search(c) and not _NEGATION.search(c) and not _REMOVED.search(c)
-                    for c in clauses)
-    removed = unclear = False
-    for clause in clauses:
-        if not _FORMULA.search(clause):
-            continue
-        own = next(part for part in clause.split(": ") if _FORMULA.search(part))
-        if _FORMULA_NOT_APPLICABLE.search(clause) or _NEGATION.search(own) or _REMOVED.search(own):
-            removed = removed or bool(_ESCALATION_WORD.search(clause))
-        elif _NEGATION.search(clause) or _REMOVED.search(clause):
-            unclear = True
-        elif escalates:
-            return FieldValue("scope", "formula", "escalation formula (quoted, not computed)")
-    if unclear:
-        return None
-    if removed:
-        return FieldValue("scope", "none", "no escalation")
-    m = _NO_ESCALATION.search(text)
-    if m:
-        if _NO_ESCALATION_UNTIL.search(text[m.end():m.end() + 40]):
-            return None
-        return FieldValue("scope", "none", "no escalation")
-    return None
-
-
 _COMPANY = r"[A-Z][\w&'’\-]*(?:\s+(?:[A-Z][\w&'’\-]*|&|of|plc|AG|SA|SE|NV|BV|GmbH|Ltd\.?|Limited|Inc\.?|S\.A\.))*"
 _INSURER = re.compile(
     r"(?i:\binsurer)\s*[:\-]\s*(?P<a>" + _COMPANY + r")|"
@@ -1537,14 +1428,14 @@ def _credit_insurer(quote: str) -> FieldValue | None:
 
 _CONTRACT_SCOPE_PARSERS = {
     "ld_triggers": _ld_triggers,
-    "liability_exclusions": _liability_exclusions,
+    "liability_exclusions": _quoted_clause("liability_exclusions"),
     "warranty_on_site": _warranty_on_site,
     "warranty_coverage": _warranty_coverage,
-    "named_place": _named_place,
+    "named_place": _quoted_clause("named_place"),
     "price_currency": _price_currency,
     "price_fixed_after_ntp": _price_fixed_after_ntp,
     "price_type": _price_type,
-    "escalation_formula": _escalation_formula,
+    "escalation_formula": _quoted_clause("escalation_formula"),
     "credit_insurer": _credit_insurer,
     "fa_reference": _fa_reference,
     "order": _precedence_order,
@@ -1688,7 +1579,13 @@ def _unit_label(value: FieldValue) -> str:
 
 
 def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[bool, str]:
-    """Return (passed, offered value expressed in the required unit)."""
+    """Return (passed, offered value expressed in the required unit).
+
+    A citation-only field (CITATION_ONLY) is never compared: the result is (False, NOT_COMPARABLE), and the
+    caller records it as not comparable (CheckResult.comparable=False), so it neither passes nor fails.
+    """
+    if citation_only(field):
+        return False, NOT_COMPARABLE
     req, off = required.value, offered.value
     if field.kind == "rate_per_period":
         # Compared per week; a daily offer also shows its weekly equivalent.
@@ -1714,7 +1611,7 @@ def check(field: FieldDef, required: FieldValue, offered: FieldValue) -> tuple[b
     if field.operator == "all" and isinstance(req, tuple) and isinstance(off, tuple):
         return standards_satisfied(req, off), offered.display
     if field.kind == "scope" and isinstance(req, tuple) and isinstance(off, tuple):
-        # A set of codes (LD triggers, liability exclusions): "ge" is every required one offered.
+        # A set of codes (LD triggers): "ge" is every required one offered.
         # An order of precedence is a ranking, so it is equal only in the same order.
         if field.operator == "ge":
             return set(off) >= set(req), offered.display

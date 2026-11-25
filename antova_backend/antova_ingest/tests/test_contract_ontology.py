@@ -6,14 +6,17 @@ from typing import get_args
 
 import pytest
 
-from antova_engine import Criticality
-from antova_ingest import artifacts, config, contract_ontology, extract, ontology
+from antova_engine import ComplianceStatus, Criticality
+from antova_ingest import artifacts, config, contract_ontology, costs, extract, ontology
 from antova_ingest.contract_ontology import (
     CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID, CONTRACT_ROLES, LEGAL_TERMS, TBE_EQUIVALENT,
 )
 from antova_ingest.tests.fakes import PACK
-from antova_ingest.types import FieldKind
-from antova_ingest.values import parse_field, plausible, plausible_bounds
+from antova_ingest.precedence import resolve
+from antova_ingest.types import Citation, Evidence, FieldKind, FieldValue
+from antova_ingest.values import (
+    CITATION_ONLY, NOT_COMPARABLE, check, citation_only, parse_field, plausible, plausible_bounds, value_in_span,
+)
 
 CLASSES = tuple(ontology.PARAMETERS_BY_CLASS)
 EQUIPMENT_PARAMETERS = {p.id: p for params in ontology.PARAMETERS_BY_CLASS.values() for p in params}
@@ -120,8 +123,6 @@ CANONICAL = {
     ("CT-01", "ld_triggers"): "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning.",
     ("CT-02", "liability_cap"): "The Supplier's total liability is limited to 100% of the Contract Price.",
     ("CT-02", "liability_cap_money"): "The Supplier's total liability is limited to EUR 500,000.",
-    ("CT-02", "liability_exclusions"): "The limitation of liability shall not apply in case of gross negligence, "
-                                       "wilful misconduct or fraud.",
     ("CT-03", "warranty_months"): "The warranty period is 24 months from PAC.",
     ("CT-03", "warranty_start"): "The warranty period starts from Provisional Acceptance (PAC).",
     ("CT-03", "warranty_on_site"): "Defective parts shall be repaired or replaced on site at the Seller's cost.",
@@ -137,11 +138,9 @@ CANONICAL = {
     ("CT-10", "ntp_deadline_months"): "The Buyer may issue the NTP within 8 months from the Project Purchase Order.",
     ("CT-11", "design_life_months"): "The equipment has a minimum operating period of 35 years.",
     ("CT-12", "incoterm"): "Delivery DAP Site Rotterdam (Incoterms 2020).",
-    ("CT-12", "named_place"): "Delivery DAP Site Rotterdam (Incoterms 2020).",
     ("CT-13", "price_currency"): "The Contract Price is in EUR.",
     ("CT-13", "price_fixed_after_ntp"): "The price is fixed and firm from the issue of the Notice to Proceed.",
     ("CT-13", "price_type"): "The Contract Price is a fixed lump sum.",
-    ("CT-13", "escalation_formula"): "The price is not subject to any escalation.",
     ("CT-14", "law"): "This contract is governed by the laws of England and Wales.",
     ("CT-14", "forum"): "Disputes shall be finally settled by ICC arbitration in London.",
     ("CT-15", "credit_insurer"): "The Supplier holds credit insurance with Northgate Credit Assurance plc.",
@@ -153,7 +152,8 @@ CANONICAL = {
 
 
 def test_every_field_reads_from_a_usual_wording():
-    fields = {(p.id, f.name): f for p in CONTRACT_PARAMETERS for f in p.fields}
+    # The citation-only fields (ruling R18) are recorded as quoted; they have their own tests below.
+    fields = {(p.id, f.name): f for p in CONTRACT_PARAMETERS for f in p.fields if f.name not in CITATION_ONLY}
     assert set(CANONICAL) == set(fields)
     for key, quote in CANONICAL.items():
         f = fields[key]
@@ -182,16 +182,9 @@ NOT_A_VALUE = [
     ("warranty_on_site", "The Contractor shall remedy any defect in the Works on site.", 1),
     ("warranty_coverage", "The warranty covers all components, except normal wear and tear.", 1),
     ("warranty_coverage", "The warranty covers all components and shall only start at PAC.", 1),
-    ("liability_exclusions", "The Supplier excludes all liability for third-party claims.", None),
-    ("named_place", "FCA, Incoterms 2020, named place Hamburg.", "hamburg"),
-    ("named_place", "Delivery DAP Incoterms 2020 Rotterdam.", "rotterdam"),
     ("price_fixed_after_ntp", "The price is fixed from NTP and shall not be subject to escalation.", 1),
     ("price_type", "The Contract Price is a fixed lump sum and shall not be subject to adjustment.", "fixed_lump_sum"),
     ("price_type", "The Contract Price is a fixed lump sum, not subject to escalation.", "fixed_lump_sum"),
-    ("escalation_formula", "No escalation applies before NTP; thereafter the price is adjusted per the formula "
-                           "P = P0 x Cu/Cu0.", "formula"),
-    ("escalation_formula", "No escalation applies before NTP.", None),
-    ("escalation_formula", "No escalation formula applies.", "none"),
     ("credit_insurer", "The equipment shall be insured by the Supplier until delivery.", None),
     ("credit_secured_value", "The performance security of EUR 500,000 is returned at PAC.", None),
     ("termination_fee_pct", "If the cap of 10% is reached, the Buyer may terminate the Contract.", None),
@@ -206,26 +199,11 @@ NOT_A_VALUE = [
     ("ld_triggers", "LDs apply for late delivery; delays to PAC caused by the Buyer are excluded.", ("delivery",)),
     ("ld_triggers", "LDs are not applicable to late delivery.", None),
     # Review round 2.
-    ("escalation_formula", "Prices are firm and not subject to any escalation or adjustment formula.", "none"),
-    ("escalation_formula", "There shall be no escalation or adjustment formula.", "none"),
-    ("escalation_formula", "The price is not subject to escalation. Price basis: steel index of January 2026.", "none"),
-    ("escalation_formula", "No price adjustment applies.", "none"),
-    ("escalation_formula", "The price is subject to escalation per the formula P = P0 x (0.15 + 0.85 Cu/Cu0).",
-     "formula"),
-    ("named_place", "Delivery terms: DAP Rotterdam, Incoterms 2020, including unloading.", "rotterdam"),
-    ("named_place", "DAP Rotterdam Incoterms 2020 and the risk passes on delivery.", "rotterdam"),
-    ("named_place", "DAP Site Rotterdam (Incoterms 2020).", "site rotterdam"),
-    ("named_place", "FCA Hamburg Incoterms 2020.", "hamburg"),
-    ("named_place", "DDP Site, Incoterms 2020, with the Seller bearing all duties.", "site"),
     ("design_life_months", "The service period is 5 years from PAC.", None),
     ("design_life_months", "The design period is 3 months.", None),
     ("design_life_months", "Spare parts shall be available for a service period of 10 years.", None),
     ("design_life_months", "The equipment has a design life of 25 (twenty-five) years.", 300),
     ("design_life_months", "a 30-year design life", 360),
-    ("liability_exclusions", "The limitation of liability shall not apply in case of gross negligence or fraud. "
-                             "The Supplier shall not be liable for indirect loss.", ("gross_negligence", "fraud")),
-    ("liability_exclusions", "The limitation of liability shall not apply in case of gross negligence or fraud; "
-                             "the Supplier shall not be liable for indirect loss.", ("gross_negligence", "fraud")),
     ("ntp_deadline_months", "Notice to proceed no later than 60 days from PO.", None),
     ("ntp_deadline_months", "The Buyer shall issue the NTP within 30 days after receipt of the advance payment "
                             "guarantee.", None),
@@ -247,37 +225,6 @@ NOT_A_VALUE = [
               "Annexes.", ("purchase_order", "general_conditions", "annexes")),
     ("price_fixed_after_ntp", "The price is fixed from NTP; no part of the price is variable.", None),
     # Review round 3 (the reviewer's cases.txt and cases2.txt).
-    ('escalation_formula', 'The price is subject to escalation; the formula is given in Annex 3.', 'formula'),
-    ('escalation_formula', 'Escalation formula: P = P0 (0.2 + 0.8 I/I0), where I is the index not older than 3 months.', 'formula'),
-    ('escalation_formula', 'Price adjustment per the formula in Annex No. 3.', 'formula'),
-    ('escalation_formula', 'Escalation formula: N/A.', 'none'),
-    ('escalation_formula', 'Prices are firm, excluding any escalation formula.', 'none'),
-    ('escalation_formula', 'Prices are firm and free of any escalation formula.', 'none'),
-    ('escalation_formula', 'The escalation formula of the Framework Agreement is deleted.', 'none'),
-    ('escalation_formula', 'No escalation applies before NTP. After NTP, the price is adjusted per the formula in Annex 4.', 'formula'),
-    ('escalation_formula', 'No escalation applies before NTP; after NTP the price is adjusted per the formula P = P0 x I/I0.', 'formula'),
-    ('escalation_formula', 'Prices are subject to adjustment according to the steel index published by Eurostat.', None),
-    ('escalation_formula', 'Price escalation: indexed to LME copper, formula P = P0 x Cu/Cu0.', 'formula'),
-    ('escalation_formula', 'The price is not fixed: it is adjusted per the formula P = P0 x Cu/Cu0.', None),
-    ('escalation_formula', 'Without prejudice to Clause 5, the price is adjusted per formula P = P0 x I/I0.', 'formula'),
-    ('escalation_formula', 'Prices are fixed; the escalation formula of the Framework Agreement does not apply.', 'none'),
-    ('named_place', 'DAP Rotterdam incl. unloading.', 'rotterdam'),
-    ('named_place', 'DAP Bosnia and Herzegovina, Incoterms 2020.', 'bosnia and herzegovina'),
-    ('named_place', 'DAP Site to be named by the Buyer.', None),
-    ('named_place', 'DAP Site, as defined in Clause 1.', 'site'),
-    ('named_place', 'FCA Hamburg, Germany, Incoterms 2020.', 'hamburg, germany'),
-    ('named_place', 'DAP Incoterms 2020 Rotterdam.', 'rotterdam'),
-    ('named_place', 'FCA, Incoterms 2020, named place Hamburg.', 'hamburg'),
-    ('named_place', "Delivery DAP Buyer's warehouse at the port of Antwerp.", "buyer's warehouse at the port of antwerp"),
-    ('named_place', 'Delivery: DDP Project Site Hornsea for the Wind Farm.', 'project site hornsea for the wind farm'),
-    ('named_place', 'DAP Rotterdam in accordance with Incoterms 2020.', 'rotterdam'),
-    ('named_place', 'DAP Rotterdam per ICC Incoterms® 2020.', 'rotterdam'),
-    ('named_place', 'Delivery DAP Rotterdam where unloading is by the Buyer.', None),
-    ('named_place', 'CIF Port of Antwerp, Incoterms 2010', 'port of antwerp'),
-    ('named_place', 'DAP Rotterdam, Netherlands; risk passes at delivery.', 'rotterdam, netherlands'),
-    ('named_place', 'DAP Rotterdam AND unloading', None),
-    ('named_place', 'DAP Rotterdam, Incoterms 2020', 'rotterdam'),
-    ('named_place', 'Delivery terms DAP Rotterdam Incoterms', 'rotterdam'),
     ('design_life_months', 'The minimum operating period is 20 years.', 240),
     ('design_life_months', 'Design life: 25 years.', 300),
     ('design_life_months', 'The service life of the equipment shall be 30 (thirty) years.', 360),
@@ -319,11 +266,6 @@ NOT_A_VALUE = [
     ('warranty_coverage', 'The warranty covers all components unless otherwise agreed.', None),
     ('warranty_coverage', 'The warranty covers all components.', 1),
     ('warranty_coverage', 'The warranty covers only the components listed in Annex 2.', 0),
-    ('liability_exclusions', "The Supplier's aggregate liability shall be limited to 100% of the Contract Price; this limitation shall not apply in case of gross negligence or wilful misconduct.", ('gross_negligence', 'wilful_misconduct')),
-    ('liability_exclusions', 'The total liability of the Supplier is capped at the Contract Price, save in case of gross negligence or fraud.', ('gross_negligence', 'fraud')),
-    ('liability_exclusions', 'The Supplier shall not be liable for indirect loss except in case of fraud. The limitation of liability shall not apply in case of gross negligence.', ('gross_negligence',)),
-    ('liability_exclusions', 'The Supplier excludes all liability for indirect loss.', None),
-    ('liability_exclusions', 'The limitation of liability shall not apply in case of gross negligence, wilful misconduct or fraud.', ('gross_negligence', 'wilful_misconduct', 'fraud')),
     ('performance_bond_pct', 'Performance bond (see Clause 5) of 10% of the Contract Price.', 10.0),
     ('performance_bond_pct', 'Performance bond (and advance payment bond) 10%.', None),
     ('performance_bond_pct', 'Advance payment bond (and performance bond) 10%.', None),
@@ -331,18 +273,6 @@ NOT_A_VALUE = [
     ('performance_bond_pct', 'Advance payment bond (10%) and performance bond (5%).', 5.0),
     ('warranty_bond_pct', 'Warranty bond (5%) of the Contract Price.', 5.0),
     ('performance_bond_pct', 'Performance bond (in the amount of 10%) of the Contract Price.', 10.0),
-    ('named_place', "DAP Site at the Buyer's plant in Rotterdam, Incoterms 2020.", "site at the buyer's plant in rotterdam"),
-    ('named_place', "DAP Buyer's warehouse at the port of Hamburg (Incoterms 2020).", "buyer's warehouse at the port of hamburg"),
-    ('named_place', 'DAP Site for Project Hornsea, Incoterms 2020.', 'site for project hornsea'),
-    ('named_place', 'DAP Trinidad and Tobago (Incoterms 2020).', 'trinidad and tobago'),
-    ('named_place', "DAP Rotterdam at the Seller's risk.", None),
-    ('named_place', 'DAP Site to be confirmed by the Buyer (Incoterms 2020).', None),
-    ('named_place', 'DAP Site with offloading by the Buyer.', None),
-    ('named_place', 'DDP Port of Spain, Incoterms 2020.', 'port of spain'),
-    ('named_place', "FCA Seller's works with loading", None),
-    ('escalation_formula', 'Price escalation shall apply. The formula is set out in Annex 3.', 'formula'),
-    ('escalation_formula', 'Escalation formula per Annex No. 3: P = P0 x I/I0.', 'formula'),
-    ('escalation_formula', 'The price is subject to escalation per the formula; it shall not exceed 10%.', 'formula'),
 ]
 
 
@@ -354,6 +284,222 @@ def test_a_reader_does_not_guess(name, quote, expected):
         assert value is None, value
     else:
         assert value is not None and value.value == expected, value
+
+
+# --- citation-only fields (ruling R18) -------------------------------------------------------------
+# Named place, escalation formula and liability exclusions are not normalized or compared in v1: the
+# reader records the clause as quoted (whitespace collapsed) and a reviewer compares the quoted clauses.
+
+def test_the_citation_only_fields():
+    names = {f.name for p in CONTRACT_PARAMETERS for f in p.fields}
+    assert CITATION_ONLY == {"named_place", "escalation_formula", "liability_exclusions"} and CITATION_ONLY <= names
+    assert citation_only(field("CT-12", "named_place")) and not citation_only(field("CT-12", "incoterm"))
+    # price_type and price_fixed_after_ntp keep their readers.
+    assert not citation_only(field("CT-13", "price_type")) and not citation_only(field("CT-13", "price_fixed_after_ntp"))
+
+
+CITED = [
+    (("CT-12", "named_place"), "Delivery DAP Site Rotterdam\n(Incoterms 2020).",
+     "Delivery DAP Site Rotterdam (Incoterms 2020)."),
+    (("CT-13", "escalation_formula"), "Price adjustment formula:  P = P0 x (0.15 + 0.85 x Cu/Cu0).",
+     "Price adjustment formula: P = P0 x (0.15 + 0.85 x Cu/Cu0)."),
+    (("CT-13", "escalation_formula"), "The price is not subject to any escalation.",
+     "The price is not subject to any escalation."),
+    (("CT-02", "liability_exclusions"), "  The limitation of liability shall not apply in case of gross negligence,\n"
+                                        "wilful misconduct or fraud. ",
+     "The limitation of liability shall not apply in case of gross negligence, wilful misconduct or fraud."),
+]
+
+
+@pytest.mark.parametrize("key, quote, clause", CITED)
+def test_a_citation_only_clause_is_captured_verbatim(key, quote, clause):
+    f = field(*key)
+    value = parse_field(f.kind, quote, f.name)
+    assert value == FieldValue("scope", clause, clause)
+    assert plausible(f, value) and value_in_span(value, quote)
+
+
+def test_a_quote_not_about_the_field_records_nothing():
+    assert parse_field("scope", "Total liability is limited to 100% of the price.", "liability_exclusions") is None
+    assert parse_field("scope", "Delivery to the Buyer's site in Rotterdam.", "named_place") is None
+    assert parse_field("scope", "The Contract Price is in EUR.", "escalation_formula") is None
+    assert parse_field("scope", "  ", "named_place") is None
+
+
+# The reviewer's round-4 findings: each was read to a wrong value by the old inference readers.
+NB = [
+    ("named_place", "DAP Rotterdam and the risk passes to the Buyer on arrival."),  # NB1
+    ("named_place", "DAP Rotterdam for delivery of the Goods."),  # NB1
+    ("named_place", "DAP Rotterdam to be delivered by truck."),  # NB1
+    ("named_place", "DAP Rotterdam at the latest by 1 May 2027."),  # NB1
+    ("escalation_formula", "The Contract Price is firm and not subject to escalation, indexation or any adjustment "
+                           "formula."),  # NB2
+    ("escalation_formula", "The escalation formula excludes transport costs."),  # NB3
+    ("escalation_formula", "The escalation formula is waived until NTP."),  # NB3
+    ("liability_exclusions", "Total liability is capped at 100% of the Contract Price. The LD cap of 10% shall not "
+                             "apply in case of wilful misconduct."),  # NB4
+    ("liability_exclusions", "The Supplier's aggregate liability shall be limited to 100% of the Contract Price. "
+                             "The cap on LDs shall not apply in case of fraud."),  # NB4
+]
+
+
+@pytest.mark.parametrize("name, quote", NB)
+def test_the_round_4_findings_are_captured_verbatim(name, quote):
+    value = parse_field("scope", quote, name)
+    assert value == FieldValue("scope", quote, quote)
+
+
+# Every wording the earlier inference readers were probed with (review rounds 1 to 4): the reader gives the
+# quote as written, or nothing; never a slug, "none" / "formula" or a tuple of exclusion codes.
+CITATION_PROBES = [
+    ('named_place', 'FCA, Incoterms 2020, named place Hamburg.'),
+    ('named_place', 'Delivery DAP Incoterms 2020 Rotterdam.'),
+    ('named_place', 'Delivery terms: DAP Rotterdam, Incoterms 2020, including unloading.'),
+    ('named_place', 'DAP Rotterdam Incoterms 2020 and the risk passes on delivery.'),
+    ('named_place', 'DAP Site Rotterdam (Incoterms 2020).'),
+    ('named_place', 'FCA Hamburg Incoterms 2020.'),
+    ('named_place', 'DDP Site, Incoterms 2020, with the Seller bearing all duties.'),
+    ('named_place', 'DAP Rotterdam incl. unloading.'),
+    ('named_place', 'DAP Bosnia and Herzegovina, Incoterms 2020.'),
+    ('named_place', 'DAP Site to be named by the Buyer.'),
+    ('named_place', 'DAP Site, as defined in Clause 1.'),
+    ('named_place', 'FCA Hamburg, Germany, Incoterms 2020.'),
+    ('named_place', 'DAP Incoterms 2020 Rotterdam.'),
+    ('named_place', 'FCA, Incoterms 2020, named place Hamburg.'),
+    ('named_place', "Delivery DAP Buyer's warehouse at the port of Antwerp."),
+    ('named_place', 'Delivery: DDP Project Site Hornsea for the Wind Farm.'),
+    ('named_place', 'DAP Rotterdam in accordance with Incoterms 2020.'),
+    ('named_place', 'DAP Rotterdam per ICC Incoterms® 2020.'),
+    ('named_place', 'Delivery DAP Rotterdam where unloading is by the Buyer.'),
+    ('named_place', 'CIF Port of Antwerp, Incoterms 2010'),
+    ('named_place', 'DAP Rotterdam, Netherlands; risk passes at delivery.'),
+    ('named_place', 'DAP Rotterdam AND unloading'),
+    ('named_place', 'DAP Rotterdam, Incoterms 2020'),
+    ('named_place', 'Delivery terms DAP Rotterdam Incoterms'),
+    ('named_place', "DAP Site at the Buyer's plant in Rotterdam, Incoterms 2020."),
+    ('named_place', "DAP Buyer's warehouse at the port of Hamburg (Incoterms 2020)."),
+    ('named_place', 'DAP Site for Project Hornsea, Incoterms 2020.'),
+    ('named_place', 'DAP Trinidad and Tobago (Incoterms 2020).'),
+    ('named_place', "DAP Rotterdam at the Seller's risk."),
+    ('named_place', 'DAP Site to be confirmed by the Buyer (Incoterms 2020).'),
+    ('named_place', 'DAP Site with offloading by the Buyer.'),
+    ('named_place', 'DDP Port of Spain, Incoterms 2020.'),
+    ('named_place', "FCA Seller's works with loading"),
+    ('named_place', 'DAP Rotterdam and the risk passes to the Buyer on arrival.'),
+    ('named_place', 'DAP Rotterdam and risk of loss passes on delivery.'),
+    ('named_place', 'DAP Rotterdam for delivery of the Goods.'),
+    ('named_place', 'DAP Rotterdam to be delivered by truck.'),
+    ('named_place', 'DAP Rotterdam at the latest by 1 May 2027.'),
+    ('named_place', 'DAP Rotterdam by 31 March 2027.'),
+    ('named_place', 'Delivery DAP Rotterdam within 12 months of NTP.'),
+    ('named_place', 'DAP Rotterdam shall apply.'),
+    ('named_place', 'DAP Saint Vincent and the Grenadines, Incoterms 2020.'),
+    ('named_place', 'DAP Rotterdam, Netherlands, with unloading by the Buyer.'),
+    ('named_place', 'DAP Rotterdam, and the Seller bears the cost of unloading.'),
+    ('named_place', 'DAP Rotterdam and DDP Hamburg.'),
+    ('named_place', 'DAP Rotterdam inclusive of unloading.'),
+    ('named_place', 'DAP Rotterdam excl. duties.'),
+    ('named_place', "DAP Site, which is the Buyer's plant."),
+    ('named_place', 'DAP Rotterdam, to be confirmed.'),
+    ('named_place', 'DAP Site (to be confirmed).'),
+    ('named_place', "DAP Rotterdam or Antwerp at the Buyer's option."),
+    ('named_place', 'DAP Site as defined in Clause 1.'),
+    ('escalation_formula', 'No escalation applies before NTP; thereafter the price is adjusted per the formula P = P0 x Cu/Cu0.'),
+    ('escalation_formula', 'No escalation applies before NTP.'),
+    ('escalation_formula', 'No escalation formula applies.'),
+    ('escalation_formula', 'Prices are firm and not subject to any escalation or adjustment formula.'),
+    ('escalation_formula', 'There shall be no escalation or adjustment formula.'),
+    ('escalation_formula', 'The price is not subject to escalation. Price basis: steel index of January 2026.'),
+    ('escalation_formula', 'No price adjustment applies.'),
+    ('escalation_formula', 'The price is subject to escalation per the formula P = P0 x (0.15 + 0.85 Cu/Cu0).'),
+    ('escalation_formula', 'The price is subject to escalation; the formula is given in Annex 3.'),
+    ('escalation_formula', 'Escalation formula: P = P0 (0.2 + 0.8 I/I0), where I is the index not older than 3 months.'),
+    ('escalation_formula', 'Price adjustment per the formula in Annex No. 3.'),
+    ('escalation_formula', 'Escalation formula: N/A.'),
+    ('escalation_formula', 'Prices are firm, excluding any escalation formula.'),
+    ('escalation_formula', 'Prices are firm and free of any escalation formula.'),
+    ('escalation_formula', 'The escalation formula of the Framework Agreement is deleted.'),
+    ('escalation_formula', 'No escalation applies before NTP. After NTP, the price is adjusted per the formula in Annex 4.'),
+    ('escalation_formula', 'No escalation applies before NTP; after NTP the price is adjusted per the formula P = P0 x I/I0.'),
+    ('escalation_formula', 'Prices are subject to adjustment according to the steel index published by Eurostat.'),
+    ('escalation_formula', 'Price escalation: indexed to LME copper, formula P = P0 x Cu/Cu0.'),
+    ('escalation_formula', 'The price is not fixed: it is adjusted per the formula P = P0 x Cu/Cu0.'),
+    ('escalation_formula', 'Without prejudice to Clause 5, the price is adjusted per formula P = P0 x I/I0.'),
+    ('escalation_formula', 'Prices are fixed; the escalation formula of the Framework Agreement does not apply.'),
+    ('escalation_formula', 'Price escalation shall apply. The formula is set out in Annex 3.'),
+    ('escalation_formula', 'Escalation formula per Annex No. 3: P = P0 x I/I0.'),
+    ('escalation_formula', 'The price is subject to escalation per the formula; it shall not exceed 10%.'),
+    ('escalation_formula', 'The Contract Price is firm and not subject to escalation, indexation or any adjustment formula.'),
+    ('escalation_formula', 'The price shall not be subject to escalation, adjustment or any formula.'),
+    ('escalation_formula', 'The escalation formula excludes transport costs.'),
+    ('escalation_formula', 'The escalation formula applies to the steel content only and excludes the labour portion.'),
+    ('escalation_formula', 'Escalation applies per the formula excluding freight costs.'),
+    ('escalation_formula', 'The escalation formula shall not apply to spare parts.'),
+    ('escalation_formula', 'The escalation formula does not apply before NTP.'),
+    ('escalation_formula', 'The escalation formula is waived until NTP.'),
+    ('escalation_formula', 'Escalation formula: not applicable.'),
+    ('escalation_formula', 'Price adjustment formula: see Annex 3.'),
+    ('escalation_formula', 'Escalation, if any, per formula P = P0 x I/I0.'),
+    ('escalation_formula', 'The price is not, under any circumstances, adjusted per the formula.'),
+    ('escalation_formula', 'The price is subject to escalation, the formula being P = P0 x I/I0.'),
+    ('escalation_formula', 'Price escalation per formula P = P0 (a + b I/I0) where the fixed portion a is nil.'),
+    ('escalation_formula', 'Prices are firm until NTP; thereafter the escalation formula in Annex 3 applies.'),
+    ('escalation_formula', 'The escalation formula in Annex 3 replaces the deleted Clause 7.'),
+    ('escalation_formula', 'No price escalation, adjustment formula or indexation shall apply.'),
+    ('escalation_formula', 'Prices are fixed and firm, without escalation or adjustment formula.'),
+    ('escalation_formula', 'The Supplier waives any escalation, adjustment formula or price review.'),
+    ('escalation_formula', 'The price is not subject to escalation, indexation, or adjustment formula of any kind.'),
+    ('liability_exclusions', 'The Supplier excludes all liability for third-party claims.'),
+    ('liability_exclusions', 'The limitation of liability shall not apply in case of gross negligence or fraud. The Supplier shall not be liable for indirect loss.'),
+    ('liability_exclusions', 'The limitation of liability shall not apply in case of gross negligence or fraud; the Supplier shall not be liable for indirect loss.'),
+    ('liability_exclusions', "The Supplier's aggregate liability shall be limited to 100% of the Contract Price; this limitation shall not apply in case of gross negligence or wilful misconduct."),
+    ('liability_exclusions', 'The total liability of the Supplier is capped at the Contract Price, save in case of gross negligence or fraud.'),
+    ('liability_exclusions', 'The Supplier shall not be liable for indirect loss except in case of fraud. The limitation of liability shall not apply in case of gross negligence.'),
+    ('liability_exclusions', 'The Supplier excludes all liability for indirect loss.'),
+    ('liability_exclusions', 'The limitation of liability shall not apply in case of gross negligence, wilful misconduct or fraud.'),
+    ('liability_exclusions', 'Total liability is capped at 100% of the Contract Price. The LD cap of 10% shall not apply in case of wilful misconduct.'),
+    ('liability_exclusions', "The Supplier's liability is limited as set out in Clause 20. LDs are capped at 10%, except in case of gross negligence."),
+    ('liability_exclusions', 'The limitation of liability shall not apply in case of gross negligence; the LD cap applies except in case of fraud.'),
+    ('liability_exclusions', "The Supplier's aggregate liability shall be limited to 100% of the Contract Price. The cap on LDs shall not apply in case of fraud."),
+]
+
+
+@pytest.mark.parametrize("name, quote", CITATION_PROBES)
+def test_a_citation_only_reader_never_infers(name, quote):
+    value = parse_field("scope", quote, name)
+    clause = " ".join(quote.split())
+    assert value is None or value == FieldValue("scope", clause, clause), value
+
+
+def _cited(param_id, name, quote, page):
+    f = field(param_id, name)
+    return f, parse_field(f.kind, quote, f.name), Evidence(
+        param_id, Citation("bid.pdf", page, (0.0, 0.0, 1.0, 1.0), quote, "commercial"),
+        {name: parse_field(f.kind, quote, f.name)})
+
+
+@pytest.mark.parametrize("param_id, name, required, offered", [
+    ("CT-12", "named_place", "Delivery DAP Site Rotterdam (Incoterms 2020).", "DAP Rotterdam and the risk passes."),
+    ("CT-12", "named_place", "DAP Rotterdam, Incoterms 2020.", "DAP Rotterdam, Incoterms 2020."),
+    ("CT-13", "escalation_formula", "The price is not subject to any escalation.",
+     "The price is subject to escalation per the formula P = P0 x I/I0."),
+    ("CT-02", "liability_exclusions", "The limitation of liability shall not apply in case of gross negligence.",
+     "The limitation of liability shall not apply in case of fraud."),
+])
+def test_a_citation_only_field_is_never_compared(param_id, name, required, offered):
+    f, req, _ = _cited(param_id, name, required, 1)
+    _, off, evidence = _cited(param_id, name, offered, 2)
+    # values.check: not passed, and the text says to compare by hand (equal clauses too: no comparison runs).
+    assert check(f, req, off) == (False, NOT_COMPARABLE)
+    # The resolution records it as not comparable, so it neither passes nor counts as a priced shortfall.
+    resolution = resolve(CONTRACT_PARAMS_BY_ID[param_id], {name: req}, [evidence], "V1")
+    (result,) = [c for c in resolution.checks if c.field == name]
+    assert result.comparable is False and result.passed is False
+    assert result.offered_canonical == "compare the quoted clauses by hand"
+    assert result.offered == off.display
+    assert resolution.status != ComplianceStatus.COMPLIANT
+    assert costs.deviation_classes(CONTRACT_PARAMS_BY_ID[param_id], {name}, {name: off}, {name: req},
+                                   frozenset({name})) == [f"{param_id}.{name}.compare_by_hand"]
 
 
 def test_better_is_the_buyers_side():

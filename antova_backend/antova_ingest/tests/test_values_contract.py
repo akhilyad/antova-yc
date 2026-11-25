@@ -334,15 +334,20 @@ def test_warranty_coverage_and_place_of_repair():
                        "warranty_on_site").value == 0
 
 
-def test_liability_exclusions_are_the_carve_outs():
-    v = parse_field("scope", "The limitation of liability shall not apply in case of gross negligence, wilful "
-                             "misconduct or fraud.", "liability_exclusions")
-    assert v.value == ("gross_negligence", "wilful_misconduct", "fraud")
+def test_citation_only_fields_are_the_quoted_clause():
+    # Ruling R18: liability exclusions, named place and escalation formula are recorded as quoted.
+    quote = "The limitation of liability shall not apply in case of gross negligence,\n  wilful misconduct or fraud."
+    v = parse_field("scope", quote, "liability_exclusions")
+    clause = "The limitation of liability shall not apply in case of gross negligence, wilful misconduct or fraud."
+    assert v.value == v.display == clause
     assert parse_field("scope", "Total liability is limited to 100% of the price.", "liability_exclusions") is None
+    v = parse_field("scope", "Delivery DAP Site Rotterdam (Incoterms 2020).", "named_place")
+    assert v.value == v.display == "Delivery DAP Site Rotterdam (Incoterms 2020)."
+    v = parse_field("scope", "Price adjustment formula: P = P0 x (0.15 + 0.85 x Cu/Cu0).", "escalation_formula")
+    assert v.value == v.display == "Price adjustment formula: P = P0 x (0.15 + 0.85 x Cu/Cu0)."
 
 
-def test_named_place_price_basis_and_credit_insurance():
-    assert parse_field("scope", "Delivery DAP Site Rotterdam (Incoterms 2020).", "named_place").value == "site rotterdam"
+def test_price_basis_and_credit_insurance():
     assert parse_field("scope", "The Contract Price is in EUR.", "price_currency").value == "EUR"
     assert parse_field("scope", "All prices are quoted in pounds sterling.", "price_currency").value == "GBP"
     assert parse_field("scope", "Prices in EUR; spares in GBP.", "price_currency") is None
@@ -353,9 +358,6 @@ def test_named_place_price_basis_and_credit_insurance():
     assert parse_field("scope", "The Contract Price is a fixed lump sum.", "price_type").value == "fixed_lump_sum"
     assert parse_field("scope", "The price is partly variable: the steel content is indexed.",
                        "price_type").value == "partly_variable"
-    assert parse_field("scope", "The price is not subject to any escalation.", "escalation_formula").value == "none"
-    assert parse_field("scope", "Price adjustment formula: P = P0 x (0.15 + 0.85 x Cu/Cu0).",
-                       "escalation_formula").value == "formula"
     assert parse_field("scope", "The Supplier holds credit insurance with Northgate Credit Assurance plc.",
                        "credit_insurer").display == "Northgate Credit Assurance plc"
     v = parse_field("money_cap", "secured value of EUR 2,000,000 under the credit insurance policy",
