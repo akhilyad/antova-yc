@@ -583,7 +583,9 @@ def read_values(param_id: str, citation: Citation, locale: str,
     values: dict = {}
     notes: list[dict] = []
     where = f"p.{citation.page}"
-    for f in params_by_id_for(equipment_class)[param_id].fields:
+    # A contract term (CT-xx) is read with the contract ontology, whatever the equipment class.
+    param = CONTRACT_PARAMS_BY_ID.get(param_id) or params_by_id_for(equipment_class)[param_id]
+    for f in param.fields:
         value = parse_field(f.kind, text, f.name)
         if value is None:
             if f.kind == "standard" and standard_exception(text):
@@ -603,7 +605,7 @@ def read_values(param_id: str, citation: Citation, locale: str,
                                      f"{low} to {high}; value not used"})
             continue
         values[f.name] = value
-    unread = [f for f in params_by_id_for(equipment_class)[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
+    unread = [f for f in param.fields if f.kind in _NUMERIC_KINDS and f.name not in values]
     if ambiguous and unread:
         notes.append({"code": "AMBIGUOUS_NUMBER",
                       "message": f"ambiguous number {', '.join(repr(t) for t in ambiguous)} on {where}: nothing in the "

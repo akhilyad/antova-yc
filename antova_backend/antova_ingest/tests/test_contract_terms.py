@@ -1,0 +1,296 @@
+"""Resolving each contract term across the offer, the framework agreement and the owner contract (Task 5)."""
+
+from datetime import date
+from decimal import Decimal
+
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS
+from antova_ingest.contract_terms import contract_evidence, resolve_contract_terms
+from antova_ingest.tests.helpers import evidence
+from antova_ingest.types import Citation, DocumentEntry, OwnerTerms, ProjectBaseline, TenderManifest
+
+MR = DocumentEntry(file="mr.pdf", role="mr_spec")
+BID = DocumentEntry(file="bid-a.pdf", role="vendor_bid", vendor_id="vendor-a", counterparty_id="cp-a")
+FA = DocumentEntry(file="fa-a.pdf", role="framework_agreement", counterparty_id="cp-a", dated=date(2026, 1, 10))
+AMENDMENT = DocumentEntry(file="fa-a-amd1.pdf", role="framework_agreement", counterparty_id="cp-a",
+                          amends="fa-a.pdf", dated=date(2026, 3, 2))
+OWNER = DocumentEntry(file="owner.pdf", role="owner_contract")
+
+WARRANTY_60 = "The warranty period is 60 months from provisional acceptance."
+WARRANTY_66 = "The warranty period is amended to 66 months from provisional acceptance."
+WARRANTY_24 = "The warranty period is 24 months from delivery."
+TITLE_ON_DELIVERY = "Title to the Equipment passes to the Buyer on delivery."
+INCORPORATION = "The Framework Agreement dated 10 January 2026 is incorporated into and forms part of this offer."
+
+
+def _manifest(documents, owner_terms=None):
+    project = ProjectBaseline(owner_terms=owner_terms) if owner_terms is not None else None
+    return TenderManifest(tender_id="T-1", title="t", client="c", equipment_class="mv_gis_switchgear",
+                          rate_table="mv_gis_switchgear_v2", documents=[MR, *documents],
+                          engineering_estimates={}, synthetic=True, project=project)
+
+
+def _ev(file, param_id, page, quote, section="commercial"):
+    return evidence(param_id, section, page, quote, filename=file)
+
+
+def test_every_vendor_gets_every_contract_term():
+    terms = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": []})
+    assert set(terms) == {("vendor-a", p.id) for p in CONTRACT_PARAMETERS}
+    term = terms[("vendor-a", "CT-03")]
+    assert (term.param_id, term.vendor_id) == ("CT-03", "vendor-a")
+
+
+def test_offer_cites_its_own_term():
+    offer = _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)
+    terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [offer],
+                                                         "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.state == "cited"
+    assert term.offered.kind == "document"
+    assert term.offered.values["warranty_start"].value == "delivery"
+    assert term.offered.citations == (offer.citation,)
+    assert term.fa.values["warranty_months"].value == 60  # the FA is kept apart, as the baseline
+    assert term.flags == ()
+
+
+def test_amendment_after_fa_governs():
+    fa = _ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)
+    amendment = _ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)
+    terms = resolve_contract_terms(_manifest([BID, FA, AMENDMENT]),
+                                   {"bid-a.pdf": [], "fa-a.pdf": [fa], "fa-a-amd1.pdf": [amendment]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa.values["warranty_months"].value == 66
+    assert term.fa.citations == (fa.citation, amendment.citation)
+    assert all(f["code"] != "amendment_order_unknown" for f in term.flags)
+
+
+def test_amendment_governs_only_the_fields_it_states():
+    fa = _ev("fa-a.pdf", "CT-01", 5, "Liquidated damages for delay are 0.5% of the contract price per day, "
+                                     "capped at 10% of the contract price.")
+    amendment = _ev("fa-a-amd1.pdf", "CT-01", 1, "The cap on liquidated damages is amended to 15% of the contract price.")
+    assert set(amendment.values) == {"ld_cap"}
+    terms = resolve_contract_terms(_manifest([BID, FA, AMENDMENT]),
+                                   {"bid-a.pdf": [], "fa-a.pdf": [fa], "fa-a-amd1.pdf": [amendment]})
+    fa_source = terms[("vendor-a", "CT-01")].fa
+    assert fa_source.values["ld_cap"].value == 15.0
+    assert fa_source.values["ld_rate"].value == (Decimal("0.5"), "day")
+    assert fa_source.citations == (fa.citation, amendment.citation)
+
+
+def test_amendment_order_unknown():
+    # A manifest amendment always carries a date (types.DocumentEntry); one that reaches here without it is not trusted.
+    manifest = _manifest([BID, FA, AMENDMENT])
+    manifest.documents[-1] = AMENDMENT.model_copy(update={"dated": None})
+    fa = _ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)
+    amendment = _ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)
+    terms = resolve_contract_terms(manifest, {"bid-a.pdf": [], "fa-a.pdf": [fa], "fa-a-amd1.pdf": [amendment]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.state == "conflict"
+    assert "amendment_order_unknown" in [f["code"] for f in term.flags]
+    assert "warranty_months" not in term.fa.values  # no silent pick between 60 and 66
+    assert term.fa.values["warranty_start"].value == "pac"  # both say PAC: the order does not matter
+    assert term.fa.citations == (fa.citation, amendment.citation)
+
+
+def test_amendment_dated_on_or_before_the_fa_is_order_unknown():
+    for dated in (date(2026, 1, 10), date(2025, 12, 1)):
+        early = AMENDMENT.model_copy(update={"dated": dated})
+        terms = resolve_contract_terms(_manifest([BID, FA, early]), {
+            "bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)],
+            "fa-a-amd1.pdf": [_ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)]})
+        term = terms[("vendor-a", "CT-03")]
+        assert term.state == "conflict"
+        assert "amendment_order_unknown" in [f["code"] for f in term.flags]
+
+
+def test_amendment_to_an_undated_fa_is_order_unknown():
+    undated_fa = FA.model_copy(update={"dated": None})
+    terms = resolve_contract_terms(_manifest([BID, undated_fa, AMENDMENT]), {
+        "bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)],
+        "fa-a-amd1.pdf": [_ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)]})
+    assert terms[("vendor-a", "CT-03")].state == "conflict"
+
+
+def test_inherited_needs_incorporation_clause():
+    fa_title = _ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)
+    incorporation = _ev("bid-a.pdf", "CT-16", 20, INCORPORATION)
+    assert "fa_reference" in incorporation.values
+
+    with_clause = resolve_contract_terms(_manifest([BID, FA]),
+                                         {"bid-a.pdf": [incorporation], "fa-a.pdf": [fa_title]})
+    term = with_clause[("vendor-a", "CT-09")]
+    assert term.state == "inherited"
+    assert term.offered.kind == "inherited"
+    assert term.offered.values["title_event"].value == "delivery"
+    assert term.offered.citations == (incorporation.citation, fa_title.citation)
+
+    without = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [fa_title]})
+    term = without[("vendor-a", "CT-09")]
+    assert term.state == "missing"
+    assert term.offered is None
+    assert term.fa.values["title_event"].value == "delivery"
+
+
+def test_incorporation_clause_in_the_fa_also_counts():
+    fa_title = _ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)
+    fa_clause = _ev("fa-a.pdf", "CT-16", 1, "This Framework Agreement forms part of every order placed under it.")
+    assert "fa_reference" in fa_clause.values
+    terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [fa_clause, fa_title]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.state == "inherited"
+    assert term.offered.citations == (fa_clause.citation, fa_title.citation)
+
+
+def test_incorporation_clause_inherited_from_the_fa_is_cited_once():
+    fa_clause = _ev("fa-a.pdf", "CT-16", 1, "This Framework Agreement forms part of every order placed under it.")
+    term = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [fa_clause]})[("vendor-a", "CT-16")]
+    assert term.state == "inherited"
+    assert term.offered.citations == (fa_clause.citation,)
+
+
+def test_negated_incorporation_is_not_an_incorporation_clause():
+    negated = _ev("bid-a.pdf", "CT-16", 20, "This offer is not subject to the Framework Agreement.")
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [negated], "fa-a.pdf": [_ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    assert terms[("vendor-a", "CT-09")].state == "missing"
+
+
+def test_owner_terms_from_form():
+    owner_terms = OwnerTerms(warranty_months=60, warranty_start="pac")
+    terms = resolve_contract_terms(_manifest([BID], owner_terms), {"bid-a.pdf": []})
+    owner = terms[("vendor-a", "CT-03")].owner
+    assert owner.kind == "buyer_entered"
+    assert owner.values["warranty_months"].value == 60
+    assert owner.values["warranty_months"].qualifier == "commissioning"  # PAC, read as the parser reads it
+    assert owner.values["warranty_start"].value == "pac"
+    assert owner.citations == ()
+    assert terms[("vendor-a", "CT-09")].owner is None  # the form says nothing about title
+
+
+def test_owner_terms_map_lds_liability_and_law():
+    owner_terms = OwnerTerms.model_validate({
+        "ld_rate": "0.5", "ld_rate_basis": "percent_per_week", "ld_cap": "10", "ld_cap_basis": "percent",
+        "liability_cap": {"amount": "48000000.00", "currency": "EUR"}, "law": "England and Wales",
+    })
+    terms = resolve_contract_terms(_manifest([BID], owner_terms), {"bid-a.pdf": []})
+    lds = terms[("vendor-a", "CT-01")].owner.values
+    assert lds["ld_rate"].value == (Decimal("0.5"), "week")
+    assert lds["ld_rate"].display == "0.5% per week"
+    assert lds["ld_cap"].value == 10.0 and lds["ld_cap"].qualifier == "contract"
+    cap = terms[("vendor-a", "CT-02")].owner.values["liability_cap_money"]
+    assert (cap.value, cap.qualifier, cap.display) == (Decimal("48000000.00"), "EUR", "EUR 48,000,000")
+    law = terms[("vendor-a", "CT-14")].owner.values["law"]
+    assert (law.value, law.display) == ("english", "English law")
+    for typed, code in (("German law", "german"), ("new_york", "new_york")):
+        law = resolve_contract_terms(_manifest([BID], OwnerTerms(law=typed)), {"bid-a.pdf": []})[("vendor-a", "CT-14")]
+        assert law.owner.values["law"].value == code
+    unread = resolve_contract_terms(_manifest([BID], OwnerTerms(law="Atlantis")), {"bid-a.pdf": []})[("vendor-a", "CT-14")]
+    assert unread.owner is None
+    assert "owner_value_not_mapped" in [f["code"] for f in unread.flags]
+
+
+def test_owner_ld_in_money_is_not_mapped_as_a_percent():
+    owner_terms = OwnerTerms.model_validate({"ld_rate": "10000", "ld_rate_basis": "money_per_day"})
+    term = resolve_contract_terms(_manifest([BID], owner_terms), {"bid-a.pdf": []})[("vendor-a", "CT-01")]
+    assert term.owner is None
+    assert "owner_value_not_mapped" in [f["code"] for f in term.flags]
+
+
+def test_owner_contract_document_wins_over_the_form():
+    owner_doc = _ev("owner.pdf", "CT-03", 12, "The warranty period is 66 months from provisional acceptance.")
+    terms = resolve_contract_terms(_manifest([BID, OWNER], OwnerTerms(warranty_months=60, warranty_start="pac")),
+                                   {"bid-a.pdf": [], "owner.pdf": [owner_doc]})
+    owner = terms[("vendor-a", "CT-03")].owner
+    assert owner.kind == "document"
+    assert owner.values["warranty_months"].value == 66
+    assert owner.citations == (owner_doc.citation,)
+
+
+def test_no_fa_means_fa_none():
+    terms = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": [_ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa is None
+    assert term.state == "cited"
+    assert terms[("vendor-a", "CT-09")].state == "missing"
+    assert terms[("vendor-a", "CT-09")].fa is None
+
+
+def test_vendor_without_counterparty_has_no_fa():
+    # An FA whose counterparty id happens to equal the vendor id is still not linked: only counterparty_id links.
+    bid = BID.model_copy(update={"counterparty_id": None})
+    fa = FA.model_copy(update={"counterparty_id": "vendor-a"})
+    terms = resolve_contract_terms(_manifest([bid, fa]), {
+        "bid-a.pdf": [_ev("bid-a.pdf", "CT-16", 20, INCORPORATION)],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.fa is None
+    assert term.state == "missing"
+    assert "fa_not_linked" in [f["code"] for f in term.flags]
+
+
+def test_fa_of_another_counterparty_is_not_used():
+    other = FA.model_copy(update={"counterparty_id": "cp-b"})
+    terms = resolve_contract_terms(_manifest([BID, other]), {
+        "bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)]})
+    assert terms[("vendor-a", "CT-03")].fa is None
+
+
+def test_offer_passages_use_the_tier_order():
+    datasheet = _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24, section="commercial")
+    cover = _ev("bid-a.pdf", "CT-03", 2, WARRANTY_60, section="cover_letter")
+    terms = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": [cover, datasheet]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.state == "cited"
+    assert term.offered.values["warranty_start"].value == "delivery"
+    assert term.offered.citations == (datasheet.citation,)
+
+
+def test_offer_passages_disagreeing_on_one_tier_are_a_conflict():
+    one = _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)
+    other = _ev("bid-a.pdf", "CT-03", 22, "The warranty period is 36 months from delivery.")
+    terms = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": [one, other]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.state == "conflict"
+    assert "passages_disagree" in [f["code"] for f in term.flags]
+    assert "warranty_months" not in term.offered.values
+    assert term.offered.values["warranty_start"].value == "delivery"  # both say delivery
+    assert term.offered.citations == (one.citation, other.citation)
+
+
+def test_a_document_not_read_is_flagged_not_silent():
+    terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": []})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa is None
+    assert any(f["code"] == "document_not_read" and "fa-a.pdf" in f["message"] for f in term.flags)
+
+
+def _verified(rows_by_file, locales=None):
+    return {"locales": locales or {f: "en" for f in rows_by_file},
+            "contract": {"citations": rows_by_file, "accepted": 0, "rejected": 0, "not_stated": {}}}
+
+
+def _row(param_id, file, page, quote):
+    citation = Citation(file, page, (1.0, 2.0, 3.0, 4.0), quote, "commercial")
+    return {"param_id": param_id, "citation": citation.to_dict(), "source": "locator"}
+
+
+def test_contract_evidence_reads_values_dedupes_and_drops_failed_vendors():
+    other_bid = DocumentEntry(file="bid-b.pdf", role="vendor_bid", vendor_id="vendor-b")
+    manifest = _manifest([BID, other_bid, FA])
+    verified = _verified({
+        "bid-a.pdf": [_row("CT-03", "bid-a.pdf", 21, WARRANTY_24), _row("CT-03", "bid-a.pdf", 21, WARRANTY_24),
+                      _row("PARAM-01", "bid-a.pdf", 5, "Rated current 1250 A.")],
+        "bid-b.pdf": [_row("CT-03", "bid-b.pdf", 9, WARRANTY_60)],
+        "fa-a.pdf": [_row("CT-09", "fa-a.pdf", 7, TITLE_ON_DELIVERY),
+                     _row("CT-03", "fa-a.pdf", 8, "The warranty clause is set out in Annex 4.")],
+    })
+    found, notes = contract_evidence(verified, manifest, failed_vendors={"vendor-b"})
+    assert set(found) == {"bid-a.pdf", "fa-a.pdf"}
+    assert [(e.param_id, e.citation.page) for e in found["bid-a.pdf"]] == [("CT-03", 21)]
+    assert found["bid-a.pdf"][0].values["warranty_months"].value == 24
+    assert [e.param_id for e in found["fa-a.pdf"]] == ["CT-09"]  # a passage stating no value is not evidence
+    assert notes == []
+
+
+def test_contract_evidence_without_a_contract_pass_is_empty():
+    assert contract_evidence({"locales": {}}, _manifest([BID]), failed_vendors=()) == ({}, [])
