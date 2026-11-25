@@ -429,7 +429,8 @@ _NTP_DEADLINE = re.compile(
 # What an NTP deadline is counted from, when the text says: it must be the order (or the contract).
 _PERIOD_ANCHOR = re.compile(r"\s+(?:after|from|following|of)\s+", re.IGNORECASE)
 _ORDER_ANCHOR = re.compile(r"(?:the\s+)?(?:date\s+of\s+(?:the\s+)?)?(?:signature\s+of\s+(?:the\s+)?)?(?:project\s+)?"
-                           r"(?:purchase\s+order|(?-i:PO)\b|order\b|contract\b)", re.IGNORECASE)
+                           r"(?:purchase\s+order|(?-i:PO)\b|order\b|contract\b)"
+                           r"(?!\s+(?:acknowledg|confirm))", re.IGNORECASE)  # not "the order acknowledgement"
 _LIFE = r"(?:design|service|operating|useful)\s+life|lifetime|minimum\s+operating\s+period"
 # A design life's own figure: right after the words ("design life of 30 years", "design life is thirty (30)
 # years", "25 (twenty-five) years"), with no other number between, or right before them ("a 30-year design life").
@@ -618,7 +619,7 @@ _BONDS = re.compile(
 # What may stand between a bond's name and its value: "of", "equal to ten percent (", "(the Bond) shall be",
 # or an opening bracket ("Performance bond (10%) of the Contract Price").
 _BOND_GAP = re.compile(
-    r"\s*(?:\([^)]{0,20}\)\s*)?(?:(?:shall\s+be|is|of|equal\s+to|amounting\s+to|in\s+the\s+(?:amount|value|sum)\s+of|"
+    r"\s*(?:\([^)]{0,20}\)\s*)?\(?\s*(?:(?:shall\s+be|is|of|equal\s+to|amounting\s+to|in\s+the\s+(?:amount|value|sum)\s+of|"
     r"for|valued\s+at|:|,)\s*)*(?:[a-z\-]+\s+(?:percent|per\s?cent)\s*\(\s*|\(\s*)?", re.IGNORECASE)
 
 
@@ -1107,16 +1108,20 @@ def _polarity(pattern: re.Pattern, text: str) -> set[str]:
     """How each occurrence of `pattern` in `text` stands: "negated" (a "not" within two words before it, as
     in "shall not be subject to escalation"), "unclear" (a negation earlier in the same clause, as in "no part
     of the price is variable", which this reader does not try to scope) or "stated"."""
-    states = set()
+    return {state for _, state in _polarity_matches(pattern, text)}
+
+
+def _polarity_matches(pattern: re.Pattern, text: str) -> list[tuple[re.Match, str]]:
+    found = []
     for m in pattern.finditer(text):
         clause = re.split(r"[.;,:]\s", text[:m.start()])[-1]
         if _NEGATED_BEFORE.search(clause[-30:]):
-            states.add("negated")
+            found.append((m, "negated"))
         elif _NEGATION.search(clause):
-            states.add("unclear")
+            found.append((m, "unclear"))
         else:
-            states.add("stated")
-    return states
+            found.append((m, "stated"))
+    return found
 
 
 _ANY_EVENT = "|".join(f"(?:{pattern})" for _, pattern in _EVENT_PATTERNS)
@@ -1237,13 +1242,17 @@ _REMEDY = re.compile(r"warrant|repair|defect|remed|replac|rectif", re.IGNORECASE
 
 
 def _warranty_on_site(quote: str) -> FieldValue | None:
-    """1 when warranty repairs are made on site, 0 when at the factory (or at the supplier's choice of either).
-    Only clauses about repairs count: in "Delivery ex works; warranty repairs are made on site", ex works is
-    the Incoterm."""
+    """1 when warranty repairs are made on site, 0 when at the factory; both named is None (which applies
+    when is not for this reader). Only clauses about repairs count: in "Delivery ex works; warranty repairs
+    are made on site", ex works is the Incoterm."""
     clauses = [c for c in re.split(r"[;.]\s+|[;.]$", _flat(quote)) if _REMEDY.search(c)]
-    if any(_AT_FACTORY.search(c) for c in clauses):
+    factory = any(_AT_FACTORY.search(c) for c in clauses)
+    on_site = any(_ON_SITE.search(c) for c in clauses)
+    if factory and on_site:
+        return None
+    if factory:
         return FieldValue("scope", 0, "at the factory")
-    if any(_ON_SITE.search(c) for c in clauses):
+    if on_site:
         return FieldValue("scope", 1, "on site")
     return None
 
@@ -1301,11 +1310,15 @@ def _liability_exclusions(quote: str) -> FieldValue | None:
     """What the liability cap does not limit: "shall not apply in case of gross negligence, wilful misconduct
     or fraud" -> (gross_negligence, wilful_misconduct, fraud)."""
     found = []
-    clauses = [c for s in split_sentences(_flat(quote)) for c in re.split(r";\s*", s)]
+    # Liability may be named in one clause and the carve-out in the next: "aggregate liability shall be limited
+    # to 100%; this limitation shall not apply in case of gross negligence". The quote names the liability once.
+    text = _flat(quote)
+    about_liability = bool(_LIABILITY_CONTEXT.search(text))
+    clauses = [c for s in split_sentences(text) for c in re.split(r";\s*", s)]
     for sentence in clauses:
         if _NO_LIABILITY.search(sentence):
             continue  # a liability excluded outright ("not liable for indirect loss") is not a carve-out from the cap
-        if not (_LIABILITY_CONTEXT.search(sentence) and _THE_CAP.search(sentence) and _CARVE_OUT.search(sentence)):
+        if not (about_liability and _THE_CAP.search(sentence) and _CARVE_OUT.search(sentence)):
             continue
         found += [(code, shown) for code, shown, pattern in _LIABILITY_EXCLUSIONS
                   if re.search(pattern, sentence, re.IGNORECASE) and code not in {c for c, _ in found}]
@@ -1320,23 +1333,42 @@ _INCOTERM_CODE = re.compile(r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\
 _INCOTERMS_EDITION = r"(?:ICC\s+)?Incoterms(?:®)?(?:\s+\d{4})?"
 # Before the place, an edition or "named place" may stand ("FCA, Incoterms 2020, named place Hamburg").
 _PLACE_LEAD = re.compile(r"[\s,:]*(?:" + _INCOTERMS_EDITION + r"[\s,:]*)?(?:named\s+place\b[\s,:]*)?", re.IGNORECASE)
-# The place ends at the edition, a bracket, a clause break or the words that start the rest of the sentence.
+# The place ends at a hard stop: the edition, a bracket, ";", "per / according to / in accordance with", the
+# end of the sentence, or "including / excluding" (never part of a place name).
 _PLACE_END = re.compile(
-    r"\s*(?:\(|;|\b" + _INCOTERMS_EDITION + r"|\bper\b|\baccording\b|\bin\s+accordance\b|,?\s+(?:including|incl\.|"
-    r"excluding|with|and|where|which|whereby|for|to\s+be|at\s+the)\b|\.(?:\s|$)|$)", re.IGNORECASE)
+    r"\s*(?:\(|;|\b" + _INCOTERMS_EDITION + r"|\bper\b|\baccording\b|\bin\s+accordance\b|"
+    r",?\s+(?:including|incl\.|excluding|excl\.)(?=\s|$)|\.(?:\s|$)|$)", re.IGNORECASE)
+# Words that carry the sentence on. After a comma they end the place ("Site, as defined in Clause 1"); without
+# one the reader cannot tell them from a place name ("Bosnia and Herzegovina" has "and", "Site at the Buyer's
+# plant" has "at the"), so only these, which no place name has, are looked for, and then the place is None.
+_PLACE_CARRY_ON = re.compile(
+    r"(,)?\s+(?:where|which|whereby|with|as\s+(?:defined|per|stated|set\s+out)|unload\w*|offload\w*|loading|"
+    r"(?:at|on)\s+(?:the\s+)?(?:seller|buyer|supplier|purchaser)(?:'s|’s)?\s+(?:risk|cost|expense)|"
+    r"by\s+the\s+(?:seller|buyer|supplier|purchaser))\b", re.IGNORECASE)
+_PLACE_NOT_YET_NAMED = re.compile(r"\bto\s+be\s+(?:confirmed|named|determined|agreed|defined|advised|notified)\b",
+                                  re.IGNORECASE)
 
 
 def _named_place(quote: str) -> FieldValue | None:
     """The place named after the Incoterm: "DAP Site Rotterdam (Incoterms 2020)" -> "site rotterdam",
-    "FCA, Incoterms 2020, named place Hamburg" -> "hamburg". The place is cut at the Incoterms edition and at
-    the words that carry on the sentence ("DAP Rotterdam, Incoterms 2020, including unloading" -> "rotterdam")."""
+    "FCA, Incoterms 2020, named place Hamburg" -> "hamburg", "DAP Bosnia and Herzegovina, Incoterms 2020" ->
+    "bosnia and herzegovina". A place still "to be confirmed" is None, and so is a place run on into the
+    rest of the sentence without a comma ("DAP Rotterdam where unloading is by the Buyer")."""
     for sentence in split_sentences(_flat(quote)):
         m = _INCOTERM_CODE.search(sentence)
         if not m:
             continue
         start = _PLACE_LEAD.match(sentence, m.end()).end()
         end = _PLACE_END.search(sentence, start)
-        shown = sentence[start:end.start() if end else len(sentence)].strip(" ,.:")
+        place = sentence[start:end.start() if end else len(sentence)]
+        if _PLACE_NOT_YET_NAMED.search(place):
+            return None
+        carry = _PLACE_CARRY_ON.search(place)
+        if carry:
+            if not carry.group(1):
+                return None
+            place = place[:carry.start()]
+        shown = place.strip(" ,.:")
         if shown and shown[0].isupper():
             return FieldValue("scope", shown.lower(), shown)
     return None
@@ -1366,8 +1398,10 @@ def _price_currency(quote: str) -> FieldValue | None:
 _NTP = r"(?:the\s+)?(?:issue\s+of\s+(?:the\s+)?)?(?:NTP|notice\s+to\s+proceed)\b"
 _FIXED_AFTER_NTP = re.compile(
     r"\b(?:fixed|firm)\b[^.;]{0,60}\b(?:after|following|from|upon|once|on)\s+" + _NTP + r"|"
-    r"\b(?:after|following|from|upon|once)\s+" + _NTP + r"[^.;]{0,60}\b(?:fixed|firm|not\s+subject\s+to)\b",
+    r"\b(?:after|following|from|upon|once)\s+" + _NTP + r"[^.;]{0,60}\b(?:fixed|firm|not\s+subject\s+to)\b|"
+    r"\b(?:until|before|prior\s+to)\s+" + _NTP + r"[^.;]{0,30}\b(?:fixed|firm)\s+(?:thereafter|afterwards)\b",
     re.IGNORECASE)
+_UNTIL_NTP = re.compile(r"\s+(?:\w+\s+){0,3}?(?:until|before|prior\s+to)\s+" + _NTP, re.IGNORECASE)
 # Wording that lets the price move. Each is read only where no "not" stands before it, so "shall not be
 # subject to escalation" says the price is fixed.
 _MOVES = re.compile(r"\bsubject\s+to\s+(?:any\s+)?(?:price\s+)?(?:escalation|adjustment|variation|indexation)\b|"
@@ -1379,12 +1413,14 @@ _FIXED_UNTIL_NTP = re.compile(r"\b(?:fixed|firm)\b[^.;]{0,40}\buntil\b[^.;]{0,30
 def _price_fixed_after_ntp(quote: str) -> FieldValue | None:
     """1 when the price is fixed once the NTP is issued, 0 when it may still move (escalation, variable)."""
     text = _flat(quote)
-    moves = _polarity(_MOVES, text)
-    if "unclear" in moves:
+    # Movement only until the NTP ("subject to escalation until NTP and fixed thereafter") is not movement after it.
+    moves = {state for m, state in _polarity_matches(_MOVES, text) if not _UNTIL_NTP.match(text, m.end())}
+    fixed = _polarity(_FIXED_AFTER_NTP, text)
+    if "unclear" in moves | fixed:
         return None  # "no part of the price is variable": a negation this reader does not scope
-    if "stated" in moves or _FIXED_UNTIL_NTP.search(text):
-        return FieldValue("scope", 0, "not fixed after NTP")
-    if _FIXED_AFTER_NTP.search(text):
+    if "stated" in moves or "negated" in fixed or _FIXED_UNTIL_NTP.search(text):
+        return FieldValue("scope", 0, "not fixed after NTP")  # "The price is not fixed after NTP."
+    if "stated" in fixed:
         return FieldValue("scope", 1, "fixed after NTP")
     return None
 
@@ -1419,19 +1455,49 @@ _NO_ESCALATION = re.compile(
 _ESCALATION_WORD = re.compile(r"\b(?:escalat|adjust|indexat|variation)\w*", re.IGNORECASE)
 # A formula is the word or an equation ("P = P0 x ..."). A bare "index" is not one ("steel index of January").
 _FORMULA = re.compile(r"\bformula\b|\b[A-Z]\w{0,3}\s*=\s*\S", re.IGNORECASE)
+# Wording that removes a formula without a "not": "N/A", "excluding", "free of", "deleted", "waived".
+_REMOVED = re.compile(r"(?-i:(?<![\w/])N/?A(?![\w/]))|\bexclud\w*|\bfree\s+(?:of|from)\b|\bdelet\w*|\bwaived?\b|"
+                      r"\bremoved\b|\bstruck\b|\bnot\s+applicable\b|\bnil\b|\bshall\s+not\s+apply\b|\bdoes\s+not\s+apply\b",
+                      re.IGNORECASE)
+# "Escalation formula: N/A", "Price adjustment formula: none".
+_FORMULA_NOT_APPLICABLE = re.compile(r"\bformula\s*:\s*(?:(?-i:N/?A)|none|nil|not\s+applicable|deleted)\s*$",
+                                     re.IGNORECASE)
 # "No escalation applies before NTP": a limit in time, which says nothing about after it.
 _NO_ESCALATION_UNTIL = re.compile(r"\b(?:before|until|prior\s+to|up\s+to)\b", re.IGNORECASE)
 
 
 def _escalation_formula(quote: str) -> FieldValue | None:
     """Whether the price has an escalation formula: "none", or "formula". The formula itself is quoted and
-    cited, not computed (spec 4.2, v1): only its presence is a value. A formula counts only in a clause that
-    names escalation or adjustment and has no negation anywhere in it ("not subject to any escalation or
-    adjustment formula" is none). Such a clause wins over a "no escalation" limited in time."""
-    text = _flat(quote)
-    for clause in re.split(r"[;.]\s+|[;.]$", text):
-        if _FORMULA.search(clause) and _ESCALATION_WORD.search(clause) and not _NEGATION.search(clause):
+    cited, not computed (spec 4.2, v1): only its presence is a value.
+
+    Read clause by clause (split at ". ", "; " and ", "):
+    - a negation or removal in the formula's own part of the clause ("not subject to any escalation formula",
+      "Escalation formula: N/A", "excluding / free of any escalation formula", "is deleted", "does not
+      apply") says none;
+    - a negation elsewhere in that clause ("The price is not fixed: it is adjusted per the formula") is not
+      scoped by this reader, so the answer is None;
+    - otherwise the formula counts when escalation or adjustment is stated in a clause that is not negated
+      ("subject to escalation; the formula is given in Annex 3"); it wins over a "no escalation" limited in time.
+    """
+    text = _ABBREVIATED_REF.sub("\\1\u2024", _flat(quote))  # "Annex No. 3" is not a "no"
+    clauses = re.split(r"[;.,]\s+|[;.]$", text)
+    escalates = any(_ESCALATION_WORD.search(c) and not _NEGATION.search(c) and not _REMOVED.search(c)
+                    for c in clauses)
+    removed = unclear = False
+    for clause in clauses:
+        if not _FORMULA.search(clause):
+            continue
+        own = next(part for part in clause.split(": ") if _FORMULA.search(part))
+        if _FORMULA_NOT_APPLICABLE.search(clause) or _NEGATION.search(own) or _REMOVED.search(own):
+            removed = removed or bool(_ESCALATION_WORD.search(clause))
+        elif _NEGATION.search(clause) or _REMOVED.search(clause):
+            unclear = True
+        elif escalates:
             return FieldValue("scope", "formula", "escalation formula (quoted, not computed)")
+    if unclear:
+        return None
+    if removed:
+        return FieldValue("scope", "none", "no escalation")
     m = _NO_ESCALATION.search(text)
     if m:
         if _NO_ESCALATION_UNTIL.search(text[m.end():m.end() + 40]):
