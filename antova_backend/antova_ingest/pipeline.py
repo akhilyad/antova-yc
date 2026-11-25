@@ -22,6 +22,7 @@ import anthropic
 import antova_engine as engine
 from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
+from antova_ingest.contract_ontology import CONTRACT_ROLES
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
 from antova_ingest.ontology import (
@@ -273,7 +274,7 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
         except DocumentUnreadable as exc:
             if entry.role == "mr_spec":
                 raise _failed(exc) from exc
-            warnings.append(f"{entry.vendor_id}: {exc.reason}")
+            warnings.append(f"{entry.vendor_id or entry.file}: {exc.reason}")
             documents.append({"file": entry.file, "sha256": _sha256(tender_dir / entry.file),
                               "unreadable": exc.reason, "pages": []})
             continue
@@ -302,10 +303,15 @@ def stage_located(bodies: dict, locator: Locator) -> dict:
     """
     manifest = _manifest(bodies)
     docs = _documents(bodies, manifest)
-    jobs = [(entry, docs[entry.file]) for entry in manifest.documents if entry.file in docs]
+    # TEMPORARY until the zero-retention gate (Task 4): a contract document is parsed but never sent
+    # to the locator, so nothing in it reaches a model provider.
+    held = [entry.file for entry in manifest.documents if entry.role in CONTRACT_ROLES and entry.file in docs]
+    jobs = [(entry, docs[entry.file]) for entry in manifest.documents
+            if entry.file in docs and entry.role not in CONTRACT_ROLES]
     outcomes: dict[str, dict] = {}
     failed: list[str] = []
-    warnings: list[str] = []
+    warnings: list[str] = [f"{file}: contract document not sent to the locator (no zero-retention gate yet)"
+                           for file in held]
     with ThreadPoolExecutor(max_workers=max(1, min(locate_concurrency(), len(jobs)))) as pool:
         futures = [pool.submit(locator.locate, doc) for _, doc in jobs]
         try:
@@ -315,8 +321,9 @@ def stage_located(bodies: dict, locator: Locator) -> dict:
                 except _DEGRADES_BID as exc:
                     if entry.role == "mr_spec":
                         raise _failed(exc) from exc
-                    failed.append(entry.vendor_id)
-                    warnings.append(f"{entry.vendor_id}: {exc}")
+                    if entry.vendor_id:
+                        failed.append(entry.vendor_id)
+                    warnings.append(f"{entry.vendor_id or entry.file}: {exc}")
                     continue
                 except (ExtractError, anthropic.APIError) as exc:
                     raise _failed(exc) from exc
@@ -417,6 +424,8 @@ def stage_verified(bodies: dict) -> dict:
     sweep_hits: dict[str, list[dict]] = {}
     located = refound = new = 0
     for file in responses:
+        if roles[file] in CONTRACT_ROLES:
+            continue  # TEMPORARY (Task 4): a contract document is neither located nor swept
         hits = sweep.sweep_document(docs[file], manifest.equipment_class)
         sweep_hits[file] = [{"param_id": h.param_id, "page": h.citation.page, "quote": h.citation.quote} for h in hits]
         cited = [(row["param_id"], Citation.from_dict(row["citation"])) for row in citations[file]]

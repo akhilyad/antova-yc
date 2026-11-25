@@ -33,11 +33,12 @@ OWNER_TERMS = {
     "liability_cap": {"amount": "48000000.00", "currency": "EUR", "note": "100% of contract value"},
     "warranty_months": 24, "warranty_start": "pac", "law": "England and Wales",
 }
+FX_USD_EUR = {"from_currency": "USD", "to_currency": "EUR", "rate": "0.9210", "dated": "2026-11-01"}
 PROJECT = {
     "po_award_date": {"value": "2027-01-15"},
     "frozen_budget": {"amount": "3150000.00", "currency": "EUR"},
-    "fx": [{"from_currency": "USD", "to_currency": "EUR", "rate": "0.9210", "dated": "2026-11-01"}],
-    "delay_scenario_days": {"value": "56"},
+    "fx": [FX_USD_EUR, {"from_currency": "GBP", "to_currency": "EUR", "rate": "1.17", "dated": "2026-11-01"}],
+    "delay_scenario_weeks": {"value": "8"},
     "owner_terms": OWNER_TERMS,
     "procurement_negotiated": True,
     "signing_before_ntp": False,
@@ -67,7 +68,7 @@ def test_a_manifest_with_all_four_roles_and_the_full_baseline_loads():
     assert project.frozen_budget.amount == Decimal("3150000.00") and project.frozen_budget.currency == "EUR"
     assert project.frozen_budget.source == "buyer_entered"
     assert project.fx[0].rate == Decimal("0.9210") and project.fx[0].source == "buyer_entered"
-    assert project.delay_scenario_days.value == Decimal("56")
+    assert project.delay_scenario_weeks.value == Decimal("8")
     terms = project.owner_terms
     assert terms.source == "buyer_entered" and terms.warranty_start == "pac"
     assert terms.ld_rate == Decimal("0.5") and terms.package_ld_share_pct == Decimal("12.5")
@@ -96,6 +97,13 @@ def test_unknown_owner_terms_stay_none_never_zero():
     ([MR, FA, {**FA, "file": "fa-b.pdf", "counterparty_id": "vendor-b"},
       {**FA_AMENDMENT, "amends": "fa-b.pdf"}], "amends"),
     ([MR, {**FA, "role": "contract_draft"}], "role"),
+    # An amendment carries its date: the later document governs for the clauses it covers.
+    ([MR, FA, {**FA_AMENDMENT, "dated": None}], "dated"),
+    # Only contract documents are amended this way (a revised MR or bid is a new document).
+    ([MR, BID, {**BID, "file": "bid-a-rev1.pdf", "vendor_id": "vendor-z", "amends": "bid-a.pdf",
+                "dated": "2026-02-10"}], "amends"),
+    # Two amendments that amend each other have no original.
+    ([MR, {**FA, "amends": "fa-a-amd1.pdf"}, FA_AMENDMENT], "amends"),
 ])
 def test_document_rules_reject_with_the_field_named(documents, field):
     with pytest.raises(ValidationError) as excinfo:
@@ -117,6 +125,20 @@ def test_document_rules_reject_with_the_field_named(documents, field):
     ({"owner_terms": {"ld_rate_basis": "percent_per_month"}}, "ld_rate_basis"),
     ({"owner_terms": {"ld_cap_basis": "per_day"}}, "ld_cap_basis"),
     ({"owner_terms": {"liability_cap": {"amount": "1", "currency": "eu"}}}, "currency"),
+    # One rate per currency pair, and a pair is two different currencies.
+    ({"fx": [{**FX_USD_EUR, "to_currency": "USD"}]}, "fx"),
+    ({"fx": [FX_USD_EUR, {**FX_USD_EUR, "rate": "0.95", "dated": "2026-11-20"}]}, "fx"),
+    ({"fx": [FX_USD_EUR, {**FX_USD_EUR, "from_currency": "EUR", "to_currency": "USD", "rate": "1.08"}]}, "fx"),
+    # A rate or cap is entered with its basis, or neither is.
+    ({"owner_terms": {"ld_rate": "0.5"}}, "ld_rate_basis"),
+    ({"owner_terms": {"ld_rate_basis": "percent_per_day"}}, "ld_rate"),
+    ({"owner_terms": {"ld_cap": "10"}}, "ld_cap_basis"),
+    ({"owner_terms": {"ld_cap_basis": "money"}}, "ld_cap"),
+    # Amounts, rates, caps and months are never negative.
+    ({"frozen_budget": {"amount": "-1", "currency": "EUR"}}, "amount"),
+    ({"owner_terms": {"ld_rate": "-0.5", "ld_rate_basis": "percent_per_week"}}, "ld_rate"),
+    ({"owner_terms": {"ld_cap": "-10", "ld_cap_basis": "percent"}}, "ld_cap"),
+    ({"owner_terms": {"warranty_months": -1}}, "warranty_months"),
 ])
 def test_baseline_rules_reject_with_the_field_named(project, field):
     with pytest.raises(ValidationError) as excinfo:
@@ -159,3 +181,14 @@ def test_money_and_fx_models_stand_alone():
     assert BaselineMoney(amount=Decimal("1.5"), currency="USD").note is None
     fx = BaselineFx(from_currency="USD", to_currency="EUR", rate=Decimal("0.92"), dated="2026-11-01")
     assert str(fx.dated) == "2026-11-01"
+
+
+def test_a_zero_is_kept_as_a_known_zero():
+    terms = OwnerTerms.model_validate({"ld_cap": "0", "ld_cap_basis": "percent", "warranty_months": 0})
+    assert terms.ld_cap == Decimal("0") and terms.warranty_months == 0
+
+
+def test_an_amendment_chain_loads():
+    second = {**FA_AMENDMENT, "file": "fa-a-amd2.pdf", "amends": "fa-a-amd1.pdf", "dated": "2026-08-01"}
+    manifest = _manifest([MR, FA, FA_AMENDMENT, second])
+    assert [d.amends for d in manifest.documents] == [None, None, "fa-a.pdf", "fa-a-amd1.pdf"]

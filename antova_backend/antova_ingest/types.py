@@ -27,6 +27,8 @@ FieldKind = Literal[
 
 
 DocumentRole = Literal["mr_spec", "vendor_bid", "framework_agreement", "owner_contract"]
+# The same two roles as contract_ontology.CONTRACT_ROLES (kept here: that module imports ontology, which imports this one).
+_CONTRACT_ROLES = ("framework_agreement", "owner_contract")
 # Fields added with the contract roles: left out of a dump when unset, so a stored manifest that
 # predates them is stored exactly as before.
 _CONTRACT_ENTRY_FIELDS = ("counterparty_id", "amends", "dated")
@@ -47,6 +49,12 @@ class DocumentEntry(BaseModel):
 
     @model_validator(mode="after")
     def _contract_role_owners(self):
+        if self.amends is not None:
+            if self.role not in _CONTRACT_ROLES:
+                raise ValueError(f"{self.file}: only a framework_agreement or owner_contract amends another; "
+                                 f"a {self.role} has no amends")
+            if self.dated is None:
+                raise ValueError(f"{self.file}: an entry that amends another needs dated (the later one governs)")
         if self.role == "framework_agreement":
             if not self.counterparty_id:
                 raise ValueError(f"{self.file}: a framework_agreement needs counterparty_id")
@@ -88,7 +96,7 @@ Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]  # ISO 4217 
 
 class BaselineMoney(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: Decimal
+    amount: Decimal = Field(ge=0)
     currency: Currency
     source: Literal["buyer_entered"] = "buyer_entered"
     note: str | None = None
@@ -110,14 +118,14 @@ class OwnerTerms(BaseModel):
     Each one unknown is None (never 0)."""
     model_config = ConfigDict(extra="forbid")
     contract_value: BaselineMoney | None = None
-    ld_rate: Decimal | None = None
+    ld_rate: Decimal | None = Field(default=None, ge=0)
     ld_rate_basis: Literal["percent_per_day", "percent_per_week", "money_per_day", "money_per_week"] | None = None
-    ld_cap: Decimal | None = None
+    ld_cap: Decimal | None = Field(default=None, ge=0)
     ld_cap_basis: Literal["percent", "money"] | None = None
     # The share of the owner's LDs this package carries, in percent.
     package_ld_share_pct: Decimal | None = Field(default=None, ge=0, le=100)
     liability_cap: BaselineMoney | None = None
-    warranty_months: int | None = None
+    warranty_months: int | None = Field(default=None, ge=0)
     warranty_start: str | None = None  # a project event, ontology.ORDINALS["event"]
     law: str | None = None
     source: Literal["buyer_entered"] = "buyer_entered"
@@ -129,6 +137,14 @@ class OwnerTerms(BaseModel):
         if value is not None and value not in ORDINALS["event"]:
             raise ValueError(f"warranty_start must be one of {', '.join(ORDINALS['event'])}")
         return value
+
+    @model_validator(mode="after")
+    def _numbers_carry_their_basis(self):
+        # A rate or cap without its basis cannot be computed with (per day or per week, percent or money).
+        for number, basis in (("ld_rate", "ld_rate_basis"), ("ld_cap", "ld_cap_basis")):
+            if (getattr(self, number) is None) != (getattr(self, basis) is None):
+                raise ValueError(f"{number} and {basis} are entered together or not at all")
+        return self
 
 
 class ProjectBaseline(BaseModel):
@@ -142,7 +158,8 @@ class ProjectBaseline(BaseModel):
     site_max_ambient_c: BaselineNumber | None = None
     frozen_budget: BaselineMoney | None = None
     fx: list[BaselineFx] = []
-    delay_scenario_days: BaselineNumber | None = None
+    # The delay scenario for LD comparisons, in weeks (spec 4.1); a formula needing days shows the x7.
+    delay_scenario_weeks: BaselineNumber | None = None
     owner_terms: OwnerTerms | None = None
     procurement_negotiated: bool | None = None
     signing_before_ntp: bool | None = None
@@ -157,6 +174,20 @@ class ProjectBaseline(BaseModel):
             raise ValueError("site_altitude_m must be between -500 and 6000")
         return self
 
+    @model_validator(mode="after")
+    def _one_fx_rate_per_pair(self):
+        seen: set[frozenset[str]] = set()
+        for rate in self.fx:
+            if rate.from_currency == rate.to_currency:
+                raise ValueError(f"fx: from_currency and to_currency are both {rate.from_currency}")
+            # USD->EUR and EUR->USD are one pair: two entered rates could disagree.
+            pair = frozenset((rate.from_currency, rate.to_currency))
+            if pair in seen:
+                raise ValueError(f"fx: more than one rate for {rate.from_currency}/{rate.to_currency}; "
+                                 f"one rate per currency pair")
+            seen.add(pair)
+        return self
+
     @model_serializer(mode="wrap")
     def _omit_empty_fx(self, handler):
         # No rates is left out, as an unset field is, so a baseline with only the old fields
@@ -168,7 +199,7 @@ class ProjectBaseline(BaseModel):
 
 
 PROJECT_FIELDS = ("po_award_date", "required_on_site_date", "energization_date",
-                  "site_altitude_m", "site_max_ambient_c", "frozen_budget", "fx", "delay_scenario_days",
+                  "site_altitude_m", "site_max_ambient_c", "frozen_budget", "fx", "delay_scenario_weeks",
                   "owner_terms", "procurement_negotiated", "signing_before_ntp", "project_id")
 
 
@@ -194,6 +225,13 @@ class TenderManifest(BaseModel):
                 raise ValueError(f"{d.file}: amends {d.amends!r}, which is not another document in the manifest")
             if (target.role, target.counterparty_id) != (d.role, d.counterparty_id):
                 raise ValueError(f"{d.file}: amends {d.amends!r}, which is not a {d.role} with the same counterparty")
+        for d in self.documents:
+            chain, current = {d.file}, d
+            while current.amends is not None and current.amends in by_file:
+                if current.amends in chain:
+                    raise ValueError(f"{d.file}: amends leads back to itself ({current.amends!r})")
+                chain.add(current.amends)
+                current = by_file[current.amends]
         return self
 
 

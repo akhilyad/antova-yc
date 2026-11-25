@@ -1,6 +1,7 @@
 """End-to-end ingest on the sample pack, using the answer-key locator."""
 
 import dataclasses
+import json
 import shutil
 import copy
 from decimal import Decimal
@@ -306,3 +307,46 @@ def test_tender_dir_for():
     for bad in ("../x", "TENDER-NOPE"):
         with pytest.raises(UnknownTender):
             tender_dir_for(bad)
+
+
+def _with_contract_documents(tmp_path: Path, owner_bytes: bytes | None = None) -> Path:
+    """The sample pack plus a framework agreement with vendor-a and an owner contract (synthetic copies)."""
+    folder = _copy_pack(tmp_path)
+    shutil.copy(folder / "Bid_vendor-a_Nordwerk.pdf", folder / "FA-vendor-a.pdf")
+    if owner_bytes is None:
+        shutil.copy(folder / "MR-33kV-GIS-Rev4.pdf", folder / "Owner-contract.pdf")
+    else:
+        (folder / "Owner-contract.pdf").write_bytes(owner_bytes)
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest["documents"] += [
+        {"file": "FA-vendor-a.pdf", "role": "framework_agreement", "counterparty_id": "vendor-a", "dated": "2025-03-01"},
+        {"file": "Owner-contract.pdf", "role": "owner_contract", "dated": "2026-06-30"},
+    ]
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return folder
+
+
+CONTRACT_FILES = {"FA-vendor-a.pdf", "Owner-contract.pdf"}
+
+
+def test_contract_documents_are_not_sent_to_the_locator_or_swept(tmp_path, expected, result):
+    # Until the zero-retention gate exists, a contract document is parsed but never located.
+    locator = AnswerKeyLocator(expected)
+    run = run_ingest(_with_contract_documents(tmp_path), locator=locator)
+    assert CONTRACT_FILES.isdisjoint(locator.calls)
+    located = json.loads(run.artifacts["located"].body)
+    assert CONTRACT_FILES.isdisjoint(located["outcomes"]) and None not in located["failed_vendors"]
+    verified = json.loads(run.artifacts["verified"].body)
+    assert CONTRACT_FILES.isdisjoint(verified["sweep_hits"]) and CONTRACT_FILES.isdisjoint(verified["citations"])
+    assert {k: c.status for k, c in _cells(run.tender).items()} == {k: c.status for k, c in _cells(result.tender).items()}
+    assert sum("not sent to the locator" in w for w in run.warnings) == 2
+    assert not any("None" in w for w in run.warnings), run.warnings
+
+
+def test_an_unreadable_contract_document_names_its_file_not_none(tmp_path, expected, result):
+    run = run_ingest(_with_contract_documents(tmp_path, b"not a pdf" * 50), locator=AnswerKeyLocator(expected))
+    assert any(w.startswith("Owner-contract.pdf: ") for w in run.warnings)
+    assert not any("None" in w for w in run.warnings), run.warnings
+    located = json.loads(run.artifacts["located"].body)
+    assert None not in located["failed_vendors"]
+    assert {k: c.status for k, c in _cells(run.tender).items()} == {k: c.status for k, c in _cells(result.tender).items()}

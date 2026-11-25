@@ -156,3 +156,44 @@ def test_the_export_needs_the_review_token(client):
     _verify(client)
     assert TestClient(app).get(f"{REVIEW}/export-tbe.xlsx").status_code == 401
     assert TestClient(app).get(f"{REVIEW}/clarifications.xlsx").status_code == 401
+
+
+# --- the Project sheet ---------------------------------------------------------------------------
+
+def _project_workbook(project: dict) -> bytes:
+    from datetime import datetime, timezone
+
+    from antova_export import tbe_workbook
+    brief = {"ingest_stats": {}, "tender": {"id": "T-1", "project": project}, "status": "VERIFIED",
+             "verified_at": None, "ingest_mode": "replay", "synthetic": True, "financials": []}
+    return tbe_workbook(brief=brief, tender_title="t", client="c", equipment_class="mv_gis_switchgear",
+                        rate_table_version="v2", cells=[], override_rows=[], reviews=[], clarification_rows=[],
+                        verified_by="founder", generated_at=datetime(2026, 11, 25, tzinfo=timezone.utc))
+
+
+def test_every_baseline_field_is_written_by_its_type_and_none_is_blank():
+    from antova_ingest.tests.test_manifest_contract import PROJECT
+    from antova_ingest.types import ProjectBaseline
+    project = ProjectBaseline.model_validate(PROJECT).model_dump(mode="json", exclude_none=True)
+    rows = {r[0]: r for r in _sheet_rows(_project_workbook(project), "Project")[1:]}
+    assert set(rows) == set(PROJECT)
+    assert all(r[1] not in (None, "") and r[2] == "buyer_entered" for r in rows.values()), rows
+    assert rows["po_award_date"][1] == "2027-01-15"
+    assert rows["delay_scenario_weeks"][1] == "8"
+    assert rows["frozen_budget"][1] == "3150000.00 EUR"
+    assert rows["fx"][1] == "USD→EUR 0.9210 (2026-11-01)\nGBP→EUR 1.17 (2026-11-01)"
+    assert rows["procurement_negotiated"][1] == "Yes" and rows["signing_before_ntp"][1] == "No"
+    assert rows["project_id"][1] == "PRJ-SOLAR-350"
+    terms = rows["owner_terms"][1].split("\n")
+    assert "Contract value: 48000000.00 EUR" in terms
+    assert "LD rate: 0.5 (percent_per_week)" in terms and "LD cap: 10 (percent)" in terms
+    assert "Liability cap: 48000000.00 EUR (100% of contract value)" in terms
+    assert "Warranty: 24 months from pac" in terms and "Law: England and Wales" in terms
+    assert "Package LD share: 12.5%" in terms
+
+
+def test_an_owner_term_not_entered_says_so():
+    from antova_ingest.types import ProjectBaseline
+    project = ProjectBaseline.model_validate({"owner_terms": {"law": "Spain"}}).model_dump(mode="json", exclude_none=True)
+    terms = _sheet_rows(_project_workbook(project), "Project")[1][1].split("\n")
+    assert "Law: Spain" in terms and "LD rate: not entered" in terms and "Contract value: not entered" in terms

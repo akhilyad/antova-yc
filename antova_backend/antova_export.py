@@ -81,6 +81,55 @@ def _finding_row(f: dict) -> list[Any]:
             _money_cell(f["money"], "adder"), _money_cell(f["money"], "exposure"), " | ".join(notes), pages]
 
 
+def _money(value: Mapping[str, Any]) -> str:
+    return f"{value['amount']} {value['currency']}"
+
+
+# The owner terms in the order a reader expects them, each shown with its unit or basis.
+_OWNER_TERMS = (
+    ("contract_value", "Contract value"), ("ld_rate", "LD rate"), ("ld_cap", "LD cap"),
+    ("package_ld_share_pct", "Package LD share"), ("liability_cap", "Liability cap"),
+    ("warranty_months", "Warranty"), ("law", "Law"),
+)
+
+
+def _owner_term(terms: Mapping[str, Any], name: str) -> str:
+    value = terms.get(name)
+    if value is None:
+        return "not entered"  # an unknown is said, never left blank or shown as 0
+    if name in ("contract_value", "liability_cap"):
+        return _money(value) + (f" ({value['note']})" if value.get("note") else "")
+    if name in ("ld_rate", "ld_cap"):
+        return f"{value} ({terms.get(name + '_basis')})"
+    if name == "package_ld_share_pct":
+        return f"{value}%"
+    if name == "warranty_months":
+        return f"{value} months from {terms.get('warranty_start') or 'an unstated start'}"
+    return str(value)
+
+
+def _project_value(name: str, value: Any) -> tuple[str, str | None]:
+    """A baseline field as text, and its note: each shape the baseline has is written its own way."""
+    if isinstance(value, bool):
+        return ("Yes" if value else "No"), None
+    if isinstance(value, list):  # fx: one line per entered rate
+        return "\n".join(f"{r['from_currency']}→{r['to_currency']} {r['rate']} ({r['dated']})" for r in value), None
+    if isinstance(value, Mapping):
+        if name == "owner_terms":
+            return "\n".join(f"{label}: {_owner_term(value, key)}" for key, label in _OWNER_TERMS), None
+        if "amount" in value:
+            return _money(value), value.get("note")
+        return _text(value.get("value")), value.get("note")
+    return _text(value), None
+
+
+def _project_row(name: str, value: Any) -> list[Any]:
+    text, note = _project_value(name, value)
+    # Every baseline field is buyer-entered: the dates and numbers carry it, the flags and ids inherit it.
+    source = value.get("source", "buyer_entered") if isinstance(value, Mapping) else "buyer_entered"
+    return [name, text, source, _text(note)]
+
+
 def tbe_workbook(
     *,
     brief: Mapping[str, Any],
@@ -153,10 +202,8 @@ def tbe_workbook(
     project = brief["tender"].get("project")
     if project:
         sheet = wb.create_sheet("Project")
-        _sheet(sheet, ["Field", "Value", "Source", "Note"],
-               [[name, _text(value.get("value")), value.get("source", ""), _text(value.get("note"))]
-                for name, value in project.items()],
-               [26, 18, 16, 60], wrap_columns=(3,))
+        _sheet(sheet, ["Field", "Value", "Source", "Note"], [_project_row(name, value) for name, value in project.items()],
+               [26, 60, 16, 60], wrap_columns=(1, 3))
 
     overrides = wb.create_sheet("Overrides")
     _sheet(overrides, ["Parameter", "Vendor ID", "Adder (EUR)", "Note", "Set by", "Set at"],
