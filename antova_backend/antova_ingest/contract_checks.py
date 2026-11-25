@@ -30,7 +30,7 @@ from typing import Literal
 
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
 from antova_ingest.contract_terms import ContractTerm, TermSource
-from antova_ingest.exposure import Exposure, _unknown, back_to_back_ld_gap
+from antova_ingest.exposure import Exposure, _euros, _unknown, back_to_back_ld_gap
 from antova_ingest.ontology import FieldDef
 from antova_ingest.types import BaselineFx, Citation, FieldValue, OwnerTerms
 from antova_ingest.values import EVENT_LABELS, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only
@@ -78,8 +78,13 @@ class Converted:
     reason: str = ""
 
 
+def _cents(currency: str, value: Decimal) -> str:
+    """An amount shown in a formula, rounded half up like every result; the arithmetic keeps the exact value."""
+    return f"{currency} {_euros(value):,.2f}"
+
+
 def _amount_text(value: Decimal) -> str:
-    return f"{value:,.0f}" if value == value.to_integral_value() else f"{value:,.2f}"
+    return f"{value:,.0f}" if value == value.to_integral_value() else f"{_euros(value):,.2f}"
 
 
 def fx_convert(amount: Decimal, from_currency: str, to_currency: str, fx: Sequence[BaselineFx]) -> Converted:
@@ -97,7 +102,7 @@ def fx_convert(amount: Decimal, from_currency: str, to_currency: str, fx: Sequen
         else:
             continue
         return Converted(value, f"{from_currency} {_amount_text(amount)} {op} {_dec_text(rate.rate)} ({dated}, {pair}) "
-                                f"= {to_currency} {value:,.2f}")
+                                f"= {_cents(to_currency, value)}")
     return Converted(None, "", f"no {from_currency}→{to_currency} rate entered")
 
 
@@ -171,6 +176,13 @@ def _compare(f: FieldDef, baseline: Baseline, required: FieldValue, offered: Fie
             return None, offered.display, (f"the offer's warranty starts at {EVENT_LABELS[starts[0].value]} and "
                                            f"{base}'s at {EVENT_LABELS[starts[1].value]}; there are no dates to "
                                            f"bridge them")
+        # Months from an unknown start are not comparable with months from a known one (as warranty_gap).
+        if starts[0] is None and starts[1] is not None:
+            return None, offered.display, (f"the offer does not state when its warranty starts, so its months are "
+                                           f"not compared with {base}'s from {EVENT_LABELS[starts[1].value]}")
+        if starts[1] is None and starts[0] is not None:
+            return None, offered.display, (f"{base} does not state when its warranty starts, so its months are not "
+                                           f"compared with the offer's from {EVENT_LABELS[starts[0].value]}")
     passed, shown = check(f, required, offered)
     return passed, shown, ""
 
@@ -346,21 +358,21 @@ def owner_ld_money(owner_source: TermSource | None, owner: OwnerTerms | None) ->
     if value is None:
         return OwnerLd(None, None, None, (), "the owner contract value is not entered, so the owner LDs cannot be "
                                              "put in money (and their currency is not known)")
-    shown_value = f"{currency} {value.amount:,.2f}"
+    shown_value = _cents(currency, value.amount)
     steps: list[str] = []
     number, basis = rate
     unit, period = basis.split("_per_")
     per_period = number * value.amount / HUNDRED if unit == "percent" else number
     if unit == "percent":
         steps.append(f"owner LD rate {_dec_text(number)}% per {period} × {shown_value} = "
-                     f"{currency} {per_period:,.2f} per {period}")
+                     f"{_cents(currency, per_period)} per {period}")
     per_day = per_period / 7 if period == "week" else per_period
     if period == "week":
-        steps.append(f"{currency} {per_period:,.2f} per week ÷ 7 = {currency} {per_day:,.2f} per day")
+        steps.append(f"{_cents(currency, per_period)} per week ÷ 7 = {_cents(currency, per_day)} per day")
     number, basis = cap
     cap_money = number * value.amount / HUNDRED if basis == "percent" else number
     if basis == "percent":
-        steps.append(f"owner LD cap {_dec_text(number)}% × {shown_value} = {currency} {cap_money:,.2f}")
+        steps.append(f"owner LD cap {_dec_text(number)}% × {shown_value} = {_cents(currency, cap_money)}")
     return OwnerLd(per_day, cap_money, currency, tuple(steps))
 
 
@@ -374,6 +386,9 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
         return _unknown(kind, money.reason)
     offered = term.offered.values if term.offered is not None else {}
     rate, cap = offered.get("ld_rate"), offered.get("ld_cap")
+    # An explicit "no liquidated damages" reads as a 0% cap with base "none" (values.NO_LD): the vendor pays
+    # back nothing. A rate that is only not stated is not this.
+    no_lds = rate is None and cap is not None and cap.qualifier == "none"
     if cap is not None and cap.qualifier == "delayed_portion":
         return _unknown(kind, "the vendor's LD cap is a percentage of the delayed portion, whose value is not known")
     steps = list(money.steps)
@@ -390,4 +405,5 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
                                Decimal(str(cap.value)) if cap is not None else None,
                                po_value[0] if po_value is not None else None,
                                weeks * 7 if weeks is not None else None,
-                               delay_weeks=weeks, currency=currency, conversions=tuple(steps))
+                               delay_weeks=weeks, currency=currency, conversions=tuple(steps),
+                               vendor_provides_no_lds=no_lds)

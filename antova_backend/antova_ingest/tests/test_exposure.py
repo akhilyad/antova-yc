@@ -156,7 +156,8 @@ def test_a_vendors_true_price_adds_the_priced_exclusions_and_stays_a_lower_bound
 # Vendor: 0.5% of a EUR 2,000,000 order a day, capped at 10% (EUR 200,000).
 
 def _b2b(days, vendor_rate=(D("0.5"), "day"), share=D("100"), **kw):
-    return back_to_back_ld_gap(D("10000"), D("1000000"), share, vendor_rate, D("10"), D("2000000"), days, **kw)
+    return back_to_back_ld_gap(D("10000"), D("1000000"), share, vendor_rate, D("10"), D("2000000"), days,
+                               currency="EUR", **kw)
 
 
 def test_back_to_back_gap():
@@ -184,14 +185,47 @@ def test_back_to_back_shows_the_delay_in_weeks():
 
 
 def test_back_to_back_any_missing_input_is_none():
-    assert back_to_back_ld_gap(None, D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1")).amount is None
-    assert back_to_back_ld_gap(D("1"), D("1"), D("100"), None, D("10"), D("1"), D("1")).amount is None
-    assert "delay" in back_to_back_ld_gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), None).reason
+    def gap(*args):
+        return back_to_back_ld_gap(*args, currency="EUR")
+    assert gap(None, D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1")).amount is None
+    assert gap(D("1"), D("1"), D("100"), None, D("10"), D("1"), D("1")).amount is None
+    assert "delay" in gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), None).reason
 
 
 def test_liability_back_to_back():
-    e = liability_back_to_back(D("500000"), D("10"), D("2000000"))
+    def gap(*args):
+        return liability_back_to_back(*args, currency="EUR")
+    e = gap(D("500000"), D("10"), D("2000000"))
     assert (e.kind, e.amount) == ("back_to_back_liability", D("300000.00"))
-    assert liability_back_to_back(D("500000"), D("30"), D("2000000")).amount == D("0.00")
-    assert liability_back_to_back(D("500000"), 12.5, D("2000000")).amount == D("250000.00")  # float percent read exactly
-    assert liability_back_to_back(D("500000"), None, D("2000000")).amount is None
+    assert gap(D("500000"), D("30"), D("2000000")).amount == D("0.00")
+    assert gap(D("500000"), 12.5, D("2000000")).amount == D("250000.00")  # float percent read exactly
+    assert gap(D("500000"), None, D("2000000")).amount is None
+
+
+def test_back_to_back_gap_formulas_show_the_clamp_at_zero():
+    assert "gap max(EUR 140,000.00 − EUR 140,000.00, 0) = EUR 0.00" in _b2b(D("14")).formula
+    zero = liability_back_to_back(D("500000"), D("30"), D("2000000"), currency="EUR")
+    assert ("gap max(owner cap EUR 500,000.00 − vendor 30% × EUR 2,000,000.00 (EUR 600,000.00), 0) = EUR 0.00"
+            in zero.formula)
+
+
+def test_shown_steps_round_like_the_result():
+    # Owed is exactly EUR 0.005: shown half up (0.01), as the amount is, never 0.00 beside a 0.01 result.
+    e = back_to_back_ld_gap(D("0.005"), D("100"), D("100"), None, None, None, D("1"), currency="EUR",
+                            vendor_provides_no_lds=True)
+    assert e.amount == D("0.01")
+    assert "share = EUR 0.01" in e.formula and "max(EUR 0.01 − EUR 0.00, 0) = EUR 0.01" in e.formula
+
+
+def test_vendor_with_no_lds_pays_back_nothing():
+    e = back_to_back_ld_gap(D("10000"), D("1000000"), D("50"), None, None, None, D("28"), currency="EUR",
+                            vendor_provides_no_lds=True)
+    assert e.amount == D("140000.00")  # 280,000 owed × 50% share, nothing paid back
+    assert "no liquidated damages" in e.formula
+
+
+def test_back_to_back_currency_has_no_default():
+    with pytest.raises(TypeError):
+        back_to_back_ld_gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1"))
+    with pytest.raises(TypeError):
+        liability_back_to_back(D("1"), D("10"), D("1"))

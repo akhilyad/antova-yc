@@ -189,6 +189,16 @@ def test_warranty_months_from_different_starts_are_not_compared():
     assert _only(checks, "fa", "warranty_start").passed is False  # delivery is earlier than PAC
 
 
+def test_warranty_months_with_one_start_unknown_are_not_compared():
+    fa = _read("CT-03", "The warranty period is 60 months from provisional acceptance.", "fa.pdf")
+    offer = _read("CT-03", "The warranty is 60 months.", "bid.pdf")
+    assert "warranty_start" not in offer and fa["warranty_start"].value == "pac"
+    check = _only(_checks(_term("CT-03", _source("bid.pdf", offer), _source("fa.pdf", fa))), "fa", "warranty_months")
+    assert check.passed is None and "the offer does not state when its warranty starts" in check.reason
+    mirror = _only(_checks(_term("CT-03", _source("bid.pdf", fa), _source("fa.pdf", offer))), "fa", "warranty_months")
+    assert mirror.passed is None and "the framework agreement does not state when its warranty starts" in mirror.reason
+
+
 def test_owner_percentages_are_not_compared_with_the_offers():
     owner = TermSource("buyer_entered", {"ld_rate": FieldValue("rate_per_period", (D("0.1"), "day"),
                                                                "0.1% per day")}, ())
@@ -307,6 +317,27 @@ def test_owner_ld_in_percent_is_converted_with_the_contract_value():
     assert "0.7% per week × EUR 10,000,000.00" in gap.formula and "4 weeks × 7 = 28 days" in gap.formula
 
 
+def test_owner_weekly_rate_is_divided_exactly_and_rounded_only_at_the_end():
+    owner = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_basis="money_per_week",
+                       ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))
+    assert owner_ld_money(None, owner).rate_per_day == D("10000") / 7  # not 1,428.57
+    gap = back_to_back_ld(_term("CT-01", _vendor_ld(rate="0.1")), owner, (D("1000000"), "EUR"), D("1"))
+    assert gap.amount == D("3000.00")  # 10,000 owed in the week − 7,000 paid back; 1,428.57 × 7 would give 2,999.99
+    assert "EUR 10,000.00 per week ÷ 7 = EUR 1,428.57 per day" in gap.formula
+
+
+def test_offer_with_no_lds_leaves_the_whole_owner_amount():
+    offer = _read("CT-01", "Liquidated damages are excluded.", "bid.pdf")
+    assert "ld_rate" not in offer and offer["ld_cap"].qualifier == "none"
+    owner = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_basis="money_per_day",
+                       ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))
+    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", offer)), owner, None, D("4"))
+    assert gap.amount == D("280000.00") and "no liquidated damages" in gap.formula
+    # A rate that is only not stated stays unknown.
+    unstated = _source("bid.pdf", {"ld_cap": FieldValue("percent", 10.0, "10 %", qualifier="contract")})
+    assert back_to_back_ld(_term("CT-01", unstated), owner, (D("2000000"), "EUR"), D("4")).amount is None
+
+
 def test_owner_ld_in_money_needs_no_conversion():
     owner = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_basis="money_per_day",
                        ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))
@@ -328,7 +359,10 @@ def test_back_to_back_ld_in_another_currency_needs_fx():
     term = _term("CT-01", _vendor_ld())
     assert back_to_back_ld(term, owner, (D("2000000"), "GBP"), D("4")).reason == "no EUR→GBP rate entered"
     gap = back_to_back_ld(term, owner, (D("2000000"), "GBP"), D("4"), fx=[GBP_EUR])
-    assert gap.amount is not None and "1.17 (2026-11-01" in gap.formula
+    # EUR 10,000 a day ÷ 1.17 × 28 days = GBP 239,316.2393…, less GBP 200,000 at the vendor's cap; rounded once,
+    # at the end (rounding the daily rate first would give 39,316.28).
+    assert gap.amount == D("39316.24")
+    assert "1.17 (2026-11-01" in gap.formula
 
 
 def test_vendor_cap_on_the_delayed_portion_is_none():
