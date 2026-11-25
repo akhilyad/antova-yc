@@ -29,7 +29,10 @@ from antova_ingest import config, contract_ontology, extract, ontology
 # documents, owner terms or a frozen budget (pipeline.needs_contract_pass).
 STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled", "contracted")
 # The modules that hold deterministic rules: a change to any of them changes the fingerprint.
-RULE_MODULES = ("parse.py", "values.py", "precedence.py", "costs.py", "sweep.py", "pipeline.py", "clarify.py")
+# The contract modules are among them (ruling R34): a contract-rule change alone changes the fingerprint.
+RULE_MODULES = ("parse.py", "values.py", "precedence.py", "costs.py", "sweep.py", "pipeline.py", "clarify.py",
+                "exposure.py", "contract_ontology.py", "contract_terms.py", "contract_checks.py", "budget.py",
+                "contract_findings.py")
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 

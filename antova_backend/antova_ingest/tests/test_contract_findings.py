@@ -188,6 +188,18 @@ def test_a_liability_cap_short_of_the_owners_is_one_back_to_back_finding_in_the_
     assert "÷ 1.17 (2026-11-01, GBP→EUR)" in money["formula"]
 
 
+def test_an_owner_contract_read_that_states_none_of_the_terms_says_so():
+    # Ruling R35: read and silent is not "no owner contract terms provided".
+    body = _assess(_manifest(BID_A, OWNER), {"bid-a.pdf": [], "owner.pdf": []})
+    owner = [e for e in body["not_checked"] if e["baseline"] == "owner"]
+    assert owner == [{"vendor_id": "vendor-a", "baseline": "owner",
+                      "reason": "the owner contract states none of these terms"}]
+    # With no owner contract and no owner terms, nothing was provided.
+    body = _assess(_manifest(BID_A), {"bid-a.pdf": []})
+    assert [e for e in body["not_checked"] if e["baseline"] == "owner"] == [
+        {"vendor_id": "vendor-a", "baseline": "owner", "reason": NO_OWNER}]
+
+
 def test_an_owner_contract_not_read_is_not_checked_with_its_reason():
     body = _assess(_manifest(BID_A, OWNER), {"bid-a.pdf": []})
     assert {"vendor_id": "vendor-a", "baseline": "owner",

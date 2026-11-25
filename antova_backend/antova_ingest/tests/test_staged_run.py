@@ -166,3 +166,21 @@ def test_reingest_keeps_only_the_latest_runs_artifacts(tmp_path, expected, resul
         assert len(repo.get_stage_artifacts(changed.stats["run_id"])) == len(artifacts.STAGE_NAMES)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("module", ["exposure.py", "contract_ontology.py", "contract_terms.py", "contract_checks.py",
+                                    "budget.py", "contract_findings.py"])
+def test_a_contract_rule_change_alone_changes_the_fingerprint(tmp_path, monkeypatch, module):
+    # Ruling R34: the contract modules are rules of the run.
+    package = Path(artifacts.__file__).resolve().parent
+    copy = tmp_path / "antova_ingest"
+    shutil.copytree(package, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    monkeypatch.setattr(artifacts, "_PACKAGE_DIR", copy)
+    before = artifacts.run_fingerprint(PACK, "answer_key")
+    with (copy / module).open("a", encoding="utf-8") as f:
+        f.write("\n# an edited rule\n")
+    after = artifacts.run_fingerprint(PACK, "answer_key")
+    assert after["parts"]["rules"] != before["parts"]["rules"]
+    assert after["fingerprint"] != before["fingerprint"]
+    assert {k: v for k, v in after["parts"].items() if k != "rules"} == {
+        k: v for k, v in before["parts"].items() if k != "rules"}

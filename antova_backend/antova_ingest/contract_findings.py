@@ -45,6 +45,7 @@ from antova_ingest.values import PriceRead, _dec_text, citation_only
 EMPTY_BODY = {"terms": [], "checks": [], "gaps": [], "budget": {}, "findings": [], "not_checked": []}
 NO_FA = "no framework agreement provided"
 NO_OWNER = "no owner contract terms provided"
+OWNER_SILENT = "the owner contract states none of these terms"  # read, and silent on every term (ruling R35)
 _BASELINE_NAME = {"fa": "the framework agreement", "owner": "the owner contract"}
 _CATEGORY = {"fa": "fa_conformance", "owner": "back_to_back"}
 # The owner fields compared in money by an exposure, not by a check (contract_checks, spec 9.2).
@@ -186,7 +187,8 @@ def _budget_findings(vendor_id: str, lines: Sequence[BudgetLine], citations: Seq
     return found
 
 
-def _not_checked(vendor_id: str, terms: Sequence[ContractTerm], has_exposure: bool) -> list[dict]:
+def _not_checked(vendor_id: str, terms: Sequence[ContractTerm], has_exposure: bool,
+                 owner_documents: bool) -> list[dict]:
     entries = []
     fa_unread = list(dict.fromkeys(file for t in terms for file in _unread(t, "framework_agreement")))
     if not any(t.fa_present for t in terms):
@@ -196,7 +198,8 @@ def _not_checked(vendor_id: str, terms: Sequence[ContractTerm], has_exposure: bo
                         "reason": f"the framework agreement was not read ({', '.join(fa_unread)})"})
     owner_unread = list(dict.fromkeys(file for t in terms for file in _unread(t, "owner_contract")))
     if not any(t.owner is not None for t in terms) and not has_exposure:
-        reason = f"the owner contract was not read ({', '.join(owner_unread)})" if owner_unread else NO_OWNER
+        reason = (f"the owner contract was not read ({', '.join(owner_unread)})" if owner_unread
+                  else OWNER_SILENT if owner_documents else NO_OWNER)
         entries.append({"vendor_id": vendor_id, "baseline": "owner", "reason": reason})
     return entries
 
@@ -205,11 +208,12 @@ def build_contract_findings(terms: Mapping[tuple[str, str], ContractTerm], check
                             gaps: Mapping[tuple[str, str], TermGap], exposures: Sequence[TermExposure],
                             budget: Mapping[str, Sequence[BudgetLine]], *,
                             budget_citations: Mapping[str, Sequence[Citation]] | None = None,
-                            ) -> tuple[list[dict], list[dict]]:
+                            owner_documents: bool = False) -> tuple[list[dict], list[dict]]:
     """(findings, not_checked), ordered by vendor, then term in ontology order, then baseline; budget last.
 
     `terms` keyed (vendor_id, param_id); `gaps` keyed (vendor_id, param_id) (CT-03 warranty, CT-07 payment timing);
-    `budget` keyed vendor_id, with `budget_citations` the passages its price comes from."""
+    `budget` keyed vendor_id, with `budget_citations` the passages its price comes from. `owner_documents`: the
+    tender has owner contract documents, so an owner side with no term is a contract that states none of them."""
     budget_citations = budget_citations or {}
     vendors = list(dict.fromkeys([*(v for v, _ in terms), *budget]))
     exposed = {(e.vendor_id, e.param_id) for e in exposures}
@@ -258,7 +262,7 @@ def build_contract_findings(terms: Mapping[tuple[str, str], ContractTerm], check
     ids = [f["id"] for f in findings]
     assert len(ids) == len(set(ids)), f"duplicate finding ids: {ids}"
     not_checked = [entry for v in vendors for entry in _not_checked(
-        v, [t for (vid, _), t in terms.items() if vid == v], any(vid == v for vid, _ in exposed))]
+        v, [t for (vid, _), t in terms.items() if vid == v], any(vid == v for vid, _ in exposed), owner_documents)]
     return findings, not_checked
 
 
@@ -354,8 +358,10 @@ def assess(manifest: TenderManifest, evidence: Mapping[str, list[Evidence]],
         budget[vendor_id] = budget_lines(price, tjc, tjc_currency, project.frozen_budget, project.fx)
         budget_citations[vendor_id] = tuple(dict.fromkeys(
             (*((headline_citation,) if headline_citation is not None else ()), *price.citations)))
+    owner_documents = any(d.role == "owner_contract" for d in manifest.documents)
     findings, not_checked = build_contract_findings(terms, checks, gaps, exposures, budget,
-                                                    budget_citations=budget_citations)
+                                                    budget_citations=budget_citations,
+                                                    owner_documents=owner_documents)
     return artifacts._plain({
         "terms": list(terms.values()),
         "checks": checks,
