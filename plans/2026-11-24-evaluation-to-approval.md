@@ -148,7 +148,7 @@ Plausible ranges to pin: LD rate 0.01%–5% per day; LD cap 1%–100%; warranty 
   - `BaselineMoney(amount: Decimal, currency: str, source="buyer_entered", note: str | None)`; currency is 3 upper-case letters.
   - `BaselineFx(from_currency: str, to_currency: str, rate: Decimal, dated: date, source="buyer_entered")`; `rate > 0`.
   - `OwnerTerms(contract_value: BaselineMoney | None, ld_rate: Decimal | None, ld_rate_basis: Literal["percent_per_day", "percent_per_week", "money_per_day", "money_per_week"] | None, ld_cap: Decimal | None, ld_cap_basis: Literal["percent", "money"] | None, package_ld_share_pct: Decimal | None, liability_cap: BaselineMoney | None, warranty_months: int | None, warranty_start: str | None, law: str | None, source="buyer_entered")`.
-  - `ProjectBaseline` gains `frozen_budget: BaselineMoney | None`, `fx: list[BaselineFx] = []`, `delay_scenario_days: BaselineNumber | None`, `owner_terms: OwnerTerms | None`, `procurement_negotiated: bool | None`, `signing_before_ntp: bool | None`, `project_id: str | None`.
+  - `ProjectBaseline` gains `frozen_budget: BaselineMoney | None`, `fx: list[BaselineFx] = []`, `delay_scenario_weeks: BaselineNumber | None` (R21: weeks, per spec 4.1), `owner_terms: OwnerTerms | None`, `procurement_negotiated: bool | None`, `signing_before_ntp: bool | None`, `project_id: str | None`.
 - Validation rules: `framework_agreement` requires `counterparty_id` and no `vendor_id`; `owner_contract` has neither; `amends` must name another entry of the same role and counterparty; `warranty_start` must be in `ORDINALS["event"]`; `package_ld_share_pct` within 0–100.
 
 - [ ] **Step 1: Failing tests:** one valid manifest with all four roles loads; each validation rule above rejects with a message naming the field; an old 402 manifest still loads unchanged; `ProjectBaseline` with only the old fields still validates.
@@ -264,7 +264,7 @@ def payment_timing(offered: ContractTerm) -> TermGap        # offered vs FA, CT-
 # exposure.py
 def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share_pct,
                         vendor_rate: tuple[Decimal, str] | None, vendor_cap_pct, po_value,
-                        delay_days) -> Exposure             # kind "back_to_back_ld"
+                        delay_days) -> Exposure             # kind "back_to_back_ld"; caller passes delay_scenario_weeks × 7 (R21), conversion shown
 def liability_back_to_back(owner_required_money, vendor_cap_pct, po_value) -> Exposure  # kind "back_to_back_liability"
 ```
 
