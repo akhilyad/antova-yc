@@ -1,6 +1,7 @@
 """The offered price on its contract basis, and the budget lines: offered price and variance against the frozen
 budget, converted only at the buyer-entered rate (Task 7, spec 4.4 and 9.7)."""
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -37,12 +38,15 @@ def _ct13(quote, file="bid.pdf"):
 
 def test_offered_and_variance_in_the_budget_currency_at_the_buyer_rate():
     lines = _lines(budget_lines(BASIS, None, None, EUR_BUDGET, [GBP_EUR]))
-    assert list(lines) == ["offered", "offered_with_options", "variance", "variance_with_options"]
+    assert list(lines) == ["offered", "offered_with_options", "variance", "variance_with_options",
+                           "variance_true_job_cost"]
     assert (lines["offered"].amount, lines["offered"].currency) == (D("2340000.00"), "EUR")
     assert lines["offered_with_options"].amount == D("2398500.00")
     assert lines["variance"].amount == D("-60000.00")
     assert lines["variance_with_options"].amount == D("-1500.00")
-    for line in lines.values():
+    for label, line in lines.items():
+        if label == "variance_true_job_cost":
+            continue  # no true job cost given: unknown (ruling R33)
         assert line.currency == "EUR" and line.reason == ""
         assert "1.17 (2026-11-01)" in line.formula, line.formula
         assert "GBP→EUR" in line.formula
@@ -52,9 +56,10 @@ def test_offered_and_variance_in_the_budget_currency_at_the_buyer_rate():
 
 def test_no_rate_for_the_pair_leaves_every_converted_line_unknown():
     lines = _lines(budget_lines(BASIS, None, None, EUR_BUDGET, []))
-    for line in lines.values():
+    for label, line in lines.items():
         assert line.amount is None
-        assert line.reason == "no GBP→EUR rate entered"
+        assert line.reason == ("true job cost not known" if label == "variance_true_job_cost"
+                               else "no GBP→EUR rate entered")
     usd = BaselineFx(from_currency="USD", to_currency="EUR", rate=D("0.92"), dated=date(2026, 11, 1))
     assert budget_lines(BASIS, None, None, EUR_BUDGET, [usd])[0].reason == "no GBP→EUR rate entered"
 
@@ -98,12 +103,15 @@ def test_true_job_cost_converts_to_the_budget_currency_at_the_same_buyer_rate():
     assert lines["variance"].amount == D("0.00")  # a true zero: every input known
 
 
-def test_true_job_cost_line_only_when_one_is_given_and_unknown_when_not_known():
-    assert "variance_true_job_cost" not in _lines(budget_lines(BASIS, None, None, EUR_BUDGET, [GBP_EUR]))
-    unknown = _lines(budget_lines(BASIS, None, "EUR", EUR_BUDGET, [GBP_EUR]))["variance_true_job_cost"]
-    assert unknown.amount is None and unknown.reason == "the true job cost is not known"
-    no_currency = _lines(budget_lines(BASIS, D("2400000"), None, EUR_BUDGET, [GBP_EUR]))["variance_true_job_cost"]
-    assert no_currency.amount is None and no_currency.reason == "the true job cost has no currency"
+def test_true_job_cost_line_is_always_there_and_unknown_when_not_known():
+    # Ruling R33: the line is always emitted; an unknown true job cost (or currency) is None, never left out.
+    present = _lines(budget_lines(BASIS, D("2457000"), "EUR", EUR_BUDGET, [GBP_EUR]))["variance_true_job_cost"]
+    assert (present.amount, present.currency, present.reason) == (D("57000.00"), "EUR", "")
+    assert present.formula.endswith("= EUR 57,000.00")
+    for tjc, currency in ((None, None), (None, "EUR"), (D("2400000"), None)):
+        unknown = _lines(budget_lines(BASIS, tjc, currency, EUR_BUDGET, [GBP_EUR]))["variance_true_job_cost"]
+        assert (unknown.amount, unknown.currency, unknown.formula) == (None, None, "")
+        assert unknown.reason == "true job cost not known"
     no_rate = _lines(budget_lines(BASIS, D("2400000"), "USD", EUR_BUDGET, [GBP_EUR]))["variance_true_job_cost"]
     assert no_rate.amount is None and no_rate.reason == "no USD→EUR rate entered"
 
@@ -115,6 +123,7 @@ def test_same_currency_needs_no_rate():
     assert lines["variance"].amount == D("-400000.00")
     assert lines["variance_true_job_cost"].amount == D("-50000.00")
     assert "offered_with_options" not in lines and "variance_with_options" not in lines
+    assert list(lines) == ["offered", "variance", "variance_true_job_cost"]
 
 
 def test_each_line_adds_up_from_the_figures_it_shows():
@@ -135,8 +144,19 @@ def test_each_line_adds_up_from_the_figures_it_shows():
 def test_unknown_lump_sum_or_currency_is_never_zero():
     for basis, reason in ((PriceBasis(None, "GBP", (OPTION,), (), ()), "the offered lump sum is not known"),
                           (PriceBasis(D("2000000"), None, (OPTION,), (), ()), "the offered price has no currency")):
-        for line in budget_lines(basis, None, None, EUR_BUDGET, [GBP_EUR]):
+        for line in budget_lines(basis, D("2400000"), "EUR", EUR_BUDGET, [GBP_EUR])[:-1]:
             assert line.amount is None and line.reason == reason, line
+
+
+def test_currencies_that_disagree_carry_their_reason_to_the_budget_lines():
+    # Ruling R32: the lines that need the price currency say why it is not known.
+    term = _ct13("The Contract Price is a fixed lump sum in EUR and is fixed after the notice to proceed.")
+    basis = price_basis(term, PriceRead(D("2000000"), "GBP", None))
+    reason = "the headline price is in GBP but the price basis clause says EUR"
+    lines = _lines(budget_lines(replace(basis, options=(OPTION,)), D("2400000"), "EUR", EUR_BUDGET, [GBP_EUR]))
+    for label in ("offered", "offered_with_options", "variance", "variance_with_options"):
+        assert (lines[label].amount, lines[label].reason) == (None, reason)
+    assert lines["variance_true_job_cost"].amount == D("0.00")  # the true job cost does not need the price currency
 
 
 # --- price basis -------------------------------------------------------------------------------------
@@ -167,6 +187,9 @@ def test_price_basis_currencies_that_disagree_are_unknown():
     term = _ct13("The Contract Price is a fixed lump sum in EUR and is fixed after the notice to proceed.")
     basis = price_basis(term, PriceRead(D("2000000"), "GBP", None))
     assert basis.currency is None and basis.lump_sum == D("2000000")
+    assert basis.reason == "the headline price is in GBP but the price basis clause says EUR"
+    agree = price_basis(term, PriceRead(D("2000000"), "EUR", None))
+    assert (agree.currency, agree.reason) == ("EUR", "")
 
 
 def test_price_basis_unit_rate_is_not_a_lump_sum():

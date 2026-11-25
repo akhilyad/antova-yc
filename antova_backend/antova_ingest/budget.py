@@ -3,7 +3,7 @@
 - Offered price: the contract lump sum as stated. Selected option lines are listed and summed into a second
   total; variable or provisional parts are listed and never summed.
 - Variance: offered price, converted to the budget currency, minus the frozen budget; a second pair with the
-  options; and, when a true job cost is given (priced gaps exist), the true job cost minus the budget.
+  options; and the true job cost minus the budget, always shown (unknown when the true job cost is not known).
 - Currency: the buyer-entered rate for the pair governs every conversion here (`BaselineFx`, one per pair, matched
   in either direction by `contract_checks.buyer_rate`), and each formula names the rate and its date. The rate
   table's FX (costs.py) is never used here: it governs the gap adders inside the true job cost only.
@@ -27,6 +27,7 @@ from antova_ingest.types import BaselineFx, BaselineMoney, Citation
 from antova_ingest.values import PriceRead, _dec_text
 
 NO_BUDGET = "frozen budget not entered"
+TJC_UNKNOWN = "true job cost not known"
 _NOT_FIXED_TYPES = frozenset({"partly_variable", "variable"})
 
 Label = Literal["offered", "offered_with_options", "variance", "variance_with_options", "variance_true_job_cost"]
@@ -39,6 +40,8 @@ class PriceBasis:
     options: tuple[tuple[str, Decimal], ...]  # selected option lines, in the price currency
     variable: tuple[str, ...]  # listed, never summed
     citations: tuple[Citation, ...]
+    # Why `currency` is None when the offer states it but its documents disagree (ruling R32); empty otherwise.
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ def price_basis(term_ct13: ContractTerm | None, headline: PriceRead | None) -> P
     """The offer's price basis: the headline price as its lump sum, and the CT-13 price basis clause.
 
     The currency is the headline's; where the headline names none, the price basis clause's (it is cited); where
-    the two disagree, it is not known. A headline worded per unit ("per bay") is a unit rate, not the lump sum.
+    the two disagree, it is not known and `reason` says why (ruling R32). A headline worded per unit ("per bay") is a unit rate, not the lump sum.
     A price that moves (partly variable, variable, or not fixed after NTP) lists its escalation clause as quoted:
     it is citation-only and never computed. No option lines are read here; a caller with selected options adds
     them to `options`."""
@@ -62,12 +65,14 @@ def price_basis(term_ct13: ContractTerm | None, headline: PriceRead | None) -> P
     values = offered.values if offered is not None else {}
     clause_currency = values["price_currency"].value if "price_currency" in values else None
     head_currency = headline.currency if headline is not None else None
+    reason = ""
     if head_currency and clause_currency and head_currency != clause_currency:
         currency = None
+        reason = f"the headline price is in {head_currency} but the price basis clause says {clause_currency}"
     else:
         currency = head_currency or clause_currency
     lump_sum = headline.amount if headline is not None and not headline.per_unit else None
-    return PriceBasis(lump_sum, currency, (), _variable_parts(values), offered.citations if offered else ())
+    return PriceBasis(lump_sum, currency, (), _variable_parts(values), offered.citations if offered else (), reason)
 
 
 def _variable_parts(values: dict) -> tuple[str, ...]:
@@ -132,7 +137,7 @@ def _offered(price: PriceBasis, to_currency: str | None, fx: Sequence[BaselineFx
         unknown = _Shown(None, (), "the offered lump sum is not known")
         return unknown, unknown if price.options else None
     if price.currency is None:
-        unknown = _Shown(None, (), "the offered price has no currency")
+        unknown = _Shown(None, (), price.reason or "the offered price has no currency")
         return unknown, unknown if price.options else None
     currency, lump = price.currency, _euros(price.lump_sum)
     offered = _to_budget("offered lump sum", lump, currency, to_currency, fx)
@@ -149,10 +154,8 @@ def _offered(price: PriceBasis, to_currency: str | None, fx: Sequence[BaselineFx
 
 def _true_job_cost(true_job_cost: Decimal | None, tjc_currency: str | None, to_currency: str | None,
                    fx: Sequence[BaselineFx]) -> _Shown:
-    if true_job_cost is None:
-        return _Shown(None, (), "the true job cost is not known")
-    if tjc_currency is None:
-        return _Shown(None, (), "the true job cost has no currency")
+    if true_job_cost is None or tjc_currency is None:
+        return _Shown(None, (), TJC_UNKNOWN)
     return _to_budget("true job cost", _euros(true_job_cost), tjc_currency, to_currency, fx)
 
 
@@ -161,8 +164,8 @@ def budget_lines(price: PriceBasis, true_job_cost: Decimal | None, tjc_currency:
     """The offered price and its variance against the frozen budget, in the budget currency.
 
     Lines, in order: offered; offered_with_options (when an option is selected); variance; variance_with_options
-    (when an option is selected); variance_true_job_cost (when a true job cost or its currency is given: the
-    caller passes one when priced gaps exist). Without a budget the offered lines stay in the price currency and
+    (when an option is selected); variance_true_job_cost, always (ruling R33): None with "true job cost not
+    known" when the true job cost or its currency is not known. Without a budget the offered lines stay in the price currency and
     every variance line is None with "frozen budget not entered". Variable parts are named in the offered
     formulas and never summed."""
     to_currency = budget.currency if budget is not None else None
@@ -175,7 +178,6 @@ def budget_lines(price: PriceBasis, true_job_cost: Decimal | None, tjc_currency:
     lines.append(_variance("variance", offered, budget))
     if with_options is not None:
         lines.append(_variance("variance_with_options", with_options, budget))
-    if true_job_cost is not None or tjc_currency is not None:
-        lines.append(_variance("variance_true_job_cost",
-                               _true_job_cost(true_job_cost, tjc_currency, to_currency, fx), budget))
+    lines.append(_variance("variance_true_job_cost",
+                           _true_job_cost(true_job_cost, tjc_currency, to_currency, fx), budget))
     return lines
