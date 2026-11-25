@@ -353,3 +353,145 @@ def test_contract_evidence_reads_values_dedupes_and_drops_failed_vendors():
 
 def test_contract_evidence_without_a_contract_pass_is_empty():
     assert contract_evidence({"locales": {}}, _manifest([BID]), failed_vendors=()) == ({}, [])
+
+
+# --- review round 1 (task-5-findings-r1) ------------------------------------------------------------------
+
+FA_CALL_OFF = "This Framework Agreement forms part of every order placed under it."
+NEGATED = "This offer is not subject to the Framework Agreement."
+
+
+def _codes(term):
+    return [f["code"] for f in term.flags]
+
+
+def test_an_unread_offer_inherits_nothing_from_the_fa_call_off_clause():
+    # Critical 1a: the offer was not read, so it is not silent; its terms are unknown.
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-16", 1, FA_CALL_OFF), _ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.state == "missing"
+    assert term.offered is None
+    assert term.fa.values["title_event"].value == "delivery"  # the FA itself was read
+    assert any(f["code"] == "document_not_read" and "bid-a.pdf" in f["message"] for f in term.flags)
+
+
+def test_a_failed_vendor_inherits_nothing():
+    # Critical 1b: contract_evidence leaves a failed vendor's bid out, so it is unread.
+    verified = _verified({"bid-a.pdf": [_row("CT-16", "bid-a.pdf", 20, INCORPORATION)],
+                          "fa-a.pdf": [_row("CT-16", "fa-a.pdf", 1, FA_CALL_OFF),
+                                       _row("CT-09", "fa-a.pdf", 7, TITLE_ON_DELIVERY)]})
+    manifest = _manifest([BID, FA])
+    found, _ = contract_evidence(verified, manifest, failed_vendors={"vendor-a"})
+    assert "bid-a.pdf" not in found
+    terms = resolve_contract_terms(manifest, found)
+    assert all(t.state == "missing" and t.offered is None for (v, _p), t in terms.items() if v == "vendor-a")
+
+
+def test_an_unread_amendment_leaves_the_fa_unknown():
+    # Critical 1c: the base FA's 60 months may have been amended; it is not shown as governing or inherited.
+    terms = resolve_contract_terms(_manifest([BID, FA, AMENDMENT]), {
+        "bid-a.pdf": [_ev("bid-a.pdf", "CT-16", 20, INCORPORATION)],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa is None and term.fa_present is True
+    assert term.offered is None and term.state == "missing"
+    assert any(f["code"] == "document_not_read" and "fa-a-amd1.pdf" in f["message"] for f in term.flags)
+
+
+def test_an_offer_that_refuses_the_fa_does_not_inherit_through_the_fa_clause():
+    # Critical 2: the FA says it forms part of every order; the offer says it is not subject to it.
+    negated = _ev("bid-a.pdf", "CT-16", 20, NEGATED)
+    assert negated.values == {}
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [negated],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-16", 1, FA_CALL_OFF), _ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.state == "missing" and term.offered is None
+    assert "incorporation_unclear" in _codes(term)
+
+
+def test_a_disclaimer_beside_an_incorporation_clause_blocks_inheritance():
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [_ev("bid-a.pdf", "CT-16", 2, INCORPORATION), _ev("bid-a.pdf", "CT-16", 20, NEGATED)],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.state == "missing"
+    assert "incorporation_unclear" in _codes(term)
+
+
+def test_contract_evidence_keeps_a_disclaimer_of_the_fa():
+    verified = _verified({"bid-a.pdf": [_row("CT-16", "bid-a.pdf", 20, NEGATED)]})
+    found, _ = contract_evidence(verified, _manifest([BID]), failed_vendors=())
+    assert [(e.param_id, e.values) for e in found["bid-a.pdf"]] == [("CT-16", {})]
+
+
+def test_differently_worded_incorporation_clauses_still_incorporate():
+    # Important 3: both passages incorporate the FA; the wording differs, the meaning does not.
+    short = _ev("bid-a.pdf", "CT-16", 2, "This offer is subject to the Framework Agreement.")
+    long = _ev("bid-a.pdf", "CT-16", 20, INCORPORATION)
+    fa_title = _ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)
+    terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [short, long], "fa-a.pdf": [fa_title]})
+    term = terms[("vendor-a", "CT-09")]
+    assert term.state == "inherited"
+    assert term.offered.citations == (short.citation, long.citation, fa_title.citation)
+
+
+def test_counterparty_ambiguous():
+    bid_b = DocumentEntry(file="bid-a2.pdf", role="vendor_bid", vendor_id="vendor-a", counterparty_id="cp-b")
+    fa_b = DocumentEntry(file="fa-b.pdf", role="framework_agreement", counterparty_id="cp-b")
+    terms = resolve_contract_terms(_manifest([BID, bid_b, FA, fa_b]), {
+        "bid-a.pdf": [], "bid-a2.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)], "fa-b.pdf": []})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa is None and term.fa_present is False
+    assert "counterparty_ambiguous" in _codes(term)
+
+
+def test_two_bids_one_naming_the_counterparty_link_the_fa():
+    unnamed = DocumentEntry(file="bid-a2.pdf", role="vendor_bid", vendor_id="vendor-a")
+    offer = _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)
+    fa_warranty = _ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)
+    terms = resolve_contract_terms(_manifest([BID, unnamed, FA]), {
+        "bid-a.pdf": [offer], "bid-a2.pdf": [], "fa-a.pdf": [fa_warranty]})
+    term = terms[("vendor-a", "CT-03")]
+    assert term.fa_present is True and term.fa.values["warranty_months"].value == 60
+    assert term.state == "cited" and term.offered.citations == (offer.citation,)
+    # One of the two bids not read: the offer is unknown, not the other bid's alone.
+    partly = resolve_contract_terms(_manifest([BID, unnamed, FA]), {
+        "bid-a.pdf": [offer], "fa-a.pdf": [fa_warranty]})[("vendor-a", "CT-03")]
+    assert partly.offered is None and partly.state == "missing"
+
+
+def test_same_day_amendments():
+    second = DocumentEntry(file="fa-a-amd2.pdf", role="framework_agreement", counterparty_id="cp-a",
+                           amends="fa-a.pdf", dated=AMENDMENT.dated)
+    base = {"bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)],
+            "fa-a-amd1.pdf": [_ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)]}
+    seventy_two = "The warranty period is amended to 72 months from provisional acceptance."
+    disagree = resolve_contract_terms(_manifest([BID, FA, AMENDMENT, second]), {
+        **base, "fa-a-amd2.pdf": [_ev("fa-a-amd2.pdf", "CT-03", 1, seventy_two)]})
+    term = disagree[("vendor-a", "CT-03")]
+    assert term.state == "conflict"
+    assert "amendment_order_unknown" in _codes(term)
+    assert "warranty_months" not in term.fa.values
+    agree = resolve_contract_terms(_manifest([BID, FA, AMENDMENT, second]), {
+        **base, "fa-a-amd2.pdf": [_ev("fa-a-amd2.pdf", "CT-03", 2, WARRANTY_66)]})
+    term = agree[("vendor-a", "CT-03")]
+    assert term.state != "conflict"
+    assert term.fa.values["warranty_months"].value == 66
+    assert len(term.fa.citations) == 3
+
+
+def test_owner_contract_amendments():
+    owner = OWNER.model_copy(update={"dated": date(2026, 1, 1)})
+    owner_amd = DocumentEntry(file="owner-amd1.pdf", role="owner_contract", amends="owner.pdf",
+                              dated=date(2026, 5, 1))
+    base = _ev("owner.pdf", "CT-03", 12, WARRANTY_60)
+    later = _ev("owner-amd1.pdf", "CT-03", 1, WARRANTY_66)
+    evidence_by_file = {"bid-a.pdf": [], "owner.pdf": [base], "owner-amd1.pdf": [later]}
+    term = resolve_contract_terms(_manifest([BID, owner, owner_amd]), evidence_by_file)[("vendor-a", "CT-03")]
+    assert term.owner.values["warranty_months"].value == 66
+    assert term.owner.citations == (base.citation, later.citation)
+    undated = resolve_contract_terms(_manifest([BID, OWNER, owner_amd]), evidence_by_file)[("vendor-a", "CT-03")]
+    assert undated.state == "conflict"
+    assert "amendment_order_unknown" in _codes(undated)

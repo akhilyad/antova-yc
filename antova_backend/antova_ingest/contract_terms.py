@@ -10,6 +10,12 @@ Three sources per term, kept apart so the checks can compare them:
   on both entries, never by name. None when there is no agreement for that counterparty.
 - owner: the owner contract's documents, or else the owner terms the buyer typed in (`buyer_entered`).
 
+Inheritance is per field (ruling R25): with an incorporation clause, each field the offer is silent on takes
+the agreement's value. Every incorporating passage counts, however worded; a cited CT-16 passage that does
+not read as incorporating (a disclaimer) blocks inheritance, and the offer's clauses decide before the
+agreement's. A source with a document that was not read has no values at all, and gives and takes nothing
+by inheritance: unknown is never shown as inherited.
+
 Within one source, the strongest evidence tier governs (precedence._tier); two passages on the same tier
 that disagree are a conflict. An amendment dated after the document it amends governs the fields it
 states and the earlier document the rest, with both citations kept. When the order is not known (no
@@ -146,15 +152,20 @@ class _Resolved:
     conflicts: list[dict]
     # The fields the documents state (a field in conflict included), and each one's citations.
     field_citations: dict[str, tuple[Citation, ...]] = field(default_factory=dict)
+    # False when a document of the source was not read: what it states is unknown, so the source has no
+    # values (not the values of the documents that were read) and neither gives nor takes inherited values.
+    complete: bool = True
 
 
 def _resolve_documents(param: ParameterDef, entries: list[DocumentEntry], by_file: Mapping[str, DocumentEntry],
                        evidence: Mapping[str, list[Evidence]]) -> _Resolved:
     """One source (an offer, an agreement with its amendments, the owner contract) for one term."""
-    read = [e for e in entries if e.file in evidence]
+    if any(e.file not in evidence for e in entries):
+        # An unread amendment may change what the read documents say; an unread offer is not a silent one.
+        return _Resolved(None, [], complete=False)
     state: dict[str, _Slot] = {}
-    _override(state, _layer(param, _passages([e.file for e in read if e.amends is None], evidence)))
-    amendments = [e for e in read if e.amends is not None]
+    _override(state, _layer(param, _passages([e.file for e in entries if e.amends is None], evidence)))
+    amendments = [e for e in entries if e.amends is not None]
     ordered = [e for e in amendments if _order_reason(e, by_file) is None]
     for dated, group in groupby(sorted(ordered, key=lambda e: e.dated), key=lambda e: e.dated):
         # Amendments of one date are ordered against what they amend, not against each other.
@@ -234,8 +245,24 @@ def owner_term_values(terms: OwnerTerms) -> tuple[dict[str, dict[str, FieldValue
 
 # --- the terms ---------------------------------------------------------------------------------------
 
-def _incorporation(source: TermSource | None) -> tuple[Citation, ...]:
-    return source.citations if source is not None and "fa_reference" in source.values else ()
+def _incorporation(entries: list[DocumentEntry],
+                   evidence: Mapping[str, list[Evidence]]) -> tuple[tuple[Citation, ...], dict | None, bool]:
+    """The incorporation clauses (CT-16) in a set of documents: (citations, blocking flag, any passage cited).
+
+    Every passage that reads as incorporating the agreement counts, however it is worded. A cited CT-16
+    passage that does not read as incorporating it (a disclaimer such as "not subject to the Framework
+    Agreement", or wording the reader does not follow) blocks inheritance, even beside one that does.
+    """
+    passages = sorted((e for d in entries for e in evidence.get(d.file, []) if e.param_id == "CT-16"),
+                      key=lambda e: (e.citation.filename, e.citation.page))
+    unclear = [e for e in passages if "fa_reference" not in e.values]
+    if unclear:
+        e = unclear[0]
+        return (), flag("incorporation_unclear",
+                        f"{_where(e.citation)} cites a clause on the framework agreement that does not read as "
+                        f"incorporating it (\"{e.citation.quote}\"), so no term is inherited from the agreement. "
+                        f"Check the clause by hand."), True
+    return tuple(dict.fromkeys(e.citation for e in passages)), None, bool(passages)
 
 
 def resolve_contract_terms(manifest: TenderManifest,
@@ -270,17 +297,20 @@ def resolve_contract_terms(manifest: TenderManifest,
             if d.file not in evidence:
                 add_flag(vendor_flags, "document_not_read",
                          f"{d.file} was not read, so the terms it states are unknown.")
-        fa_read = any(d.file in evidence for d in fa_docs)
-
-        incorporation = _incorporation(_resolve_documents(CONTRACT_PARAMS_BY_ID["CT-16"], bids, by_file, evidence).source)
-        if not incorporation and fa_read:
-            incorporation = _incorporation(
-                _resolve_documents(CONTRACT_PARAMS_BY_ID["CT-16"], fa_docs, by_file, evidence).source)
+        offer_read = all(d.file in evidence for d in bids)
+        fa_read = bool(fa_docs) and all(d.file in evidence for d in fa_docs)
+        # The offer's own clause decides; a disclaimer in it wins over the agreement's call-off clause.
+        # The agreement's clause counts only when the offer cites none.
+        incorporation, blocked = (), None
+        if offer_read:
+            incorporation, blocked, offer_cites = _incorporation(bids, evidence)
+            if not offer_cites and fa_read:
+                incorporation, blocked, _ = _incorporation(fa_docs, evidence)
 
         for param in CONTRACT_PARAMETERS:
             flags = list(vendor_flags)
             offer = _resolve_documents(param, bids, by_file, evidence)
-            fa = _resolve_documents(param, fa_docs, by_file, evidence) if fa_read else _Resolved(None, [])
+            fa = _resolve_documents(param, fa_docs, by_file, evidence)
             owner = _resolve_documents(param, owner_docs, by_file, evidence)
             owner_source = owner.source
             if owner_source is None and param.id in form_values:
@@ -291,9 +321,13 @@ def resolve_contract_terms(manifest: TenderManifest,
 
             # Ruling R25: with an incorporation clause, each field the offer is silent on takes the FA's value.
             # A field the offer states, even in conflict, is never filled from the FA.
-            inherited = ([f.name for f in param.fields
-                          if f.name in fa.source.values and f.name not in offer.field_citations]
-                         if incorporation and fa.source is not None else [])
+            # Both sides must be wholly read: nothing unknown is given or taken.
+            silent = ([f.name for f in param.fields
+                       if f.name in fa.source.values and f.name not in offer.field_citations]
+                      if offer.complete and fa.complete and fa.source is not None else [])
+            inherited = silent if incorporation else []
+            if silent and blocked:
+                add_flag(flags, blocked["code"], blocked["message"])
             if inherited:
                 fa_cites = [c for name in inherited for c in fa.field_citations[name]]
                 own = offer.source.citations if offer.source is not None else ()
@@ -328,7 +362,8 @@ def contract_evidence(verified: Mapping, manifest: TenderManifest,
     """The verified stage's contract citations as Evidence per file, with their values read from the quote.
 
     A bid of a failed vendor is left out (not read). A citation repeated in the stage body counts once; a
-    passage with a parameter id that is not a contract term, or that states no value, is not evidence.
+    passage with a parameter id that is not a contract term, or that states no value, is not evidence,
+    except a CT-16 passage (a disclaimer of the agreement blocks inheritance).
     Notes on values not believed (pipeline.read_values) are returned as {"file", "param_id", "code", "message"}.
     """
     from antova_ingest.pipeline import read_values  # imported here: the pipeline's contract stage imports this module
@@ -353,7 +388,9 @@ def contract_evidence(verified: Mapping, manifest: TenderManifest,
             values, read_notes = read_values(row["param_id"], citation, locales.get(file, "unknown"),
                                              manifest.equipment_class)
             notes.extend({"file": file, "param_id": row["param_id"], **n} for n in read_notes)
-            if values:
+            # A CT-16 passage that does not read as incorporating the agreement is kept: it may be a disclaimer,
+            # which blocks inheritance (_incorporation).
+            if values or row["param_id"] == "CT-16":
                 items.append(Evidence(row["param_id"], citation, values, source=row.get("source", "locator")))
         found[file] = items
     return found, notes
