@@ -21,6 +21,10 @@ that disagree are a conflict. An amendment dated after the document it amends go
 states and the earlier document the rest, with both citations kept. When the order is not known (no
 date, or dated on or before the amended document) and the two disagree, the field is a conflict: no
 value is picked. A conflict anywhere in a term makes the term's state "conflict".
+
+A CT-01 passage that excludes or waives LDs (values.NO_LD) is kept apart in `ld_exclusion_passages`, with or
+without a value, so the back-to-back LD check can read its scope (ruling R30). It takes no part in the
+resolution: it never makes a term cited, inherited or a conflict.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS
 from antova_ingest.ontology import ParameterDef
 from antova_ingest.precedence import _tier, add_flag, flag
 from antova_ingest.types import Citation, DocumentEntry, Evidence, FieldValue, OwnerTerms, TenderManifest
-from antova_ingest.values import EVENT_LABELS, _dec_text, _warranty_basis, parse_field
+from antova_ingest.values import EVENT_LABELS, NO_LD, _dec_text, _warranty_basis, parse_field
 
 State = Literal["cited", "inherited", "missing", "conflict"]
 
@@ -63,6 +67,10 @@ class ContractTerm:
     # An FA (as amended) is linked to the vendor's counterparty, even if it is silent on this term or was
     # not read (ruling R26). False: no framework agreement for this vendor.
     fa_present: bool
+    # CT-01 only: the offer's cited passages that exclude or waive LDs (values.NO_LD) and are not among
+    # `offered.citations`, a passage that states no value included; and the agreement's, when an LD rate or cap
+    # is inherited from it. They are read for their scope only (contract_checks.back_to_back_ld, ruling R30).
+    ld_exclusion_passages: tuple[Citation, ...] = ()
 
 
 # --- one field, while its documents are combined -------------------------------------------------
@@ -364,9 +372,24 @@ def resolve_contract_terms(manifest: TenderManifest,
                     _add(flags, {**conflict, "source": source})
             if offer.conflicts or fa.conflicts or owner.conflicts:
                 state = "conflict"
+            exclusions: tuple[Citation, ...] = ()
+            if param.id == "CT-01" and offer.complete:  # an unread bid may state anything
+                docs = [*bids, *(fa_docs if {"ld_rate", "ld_cap"} & set(inherited) else [])]
+                exclusions = _ld_exclusion_passages(docs, evidence, offered.citations if offered else ())
             terms[(vendor_id, param.id)] = ContractTerm(param.id, vendor_id, offered, fa.source, owner_source,
-                                                        state, tuple(flags), fa_present=bool(fa_docs))
+                                                        state, tuple(flags), fa_present=bool(fa_docs),
+                                                        ld_exclusion_passages=exclusions)
     return terms
+
+
+def _ld_exclusion_passages(entries: list[DocumentEntry], evidence: Mapping[str, list[Evidence]],
+                           cited: tuple[Citation, ...]) -> tuple[Citation, ...]:
+    """The CT-01 passages of these documents that exclude or waive LDs and are not already cited, in page
+    order (ruling R30)."""
+    passages = sorted((e for d in entries for e in evidence.get(d.file, []) if e.param_id == "CT-01"),
+                      key=lambda e: (e.citation.filename, e.citation.page))
+    return tuple(dict.fromkeys(e.citation for e in passages
+                               if NO_LD.search(e.citation.quote) and e.citation not in cited))
 
 
 # --- from the verified stage ---------------------------------------------------------------------------
@@ -377,7 +400,8 @@ def contract_evidence(verified: Mapping, manifest: TenderManifest,
 
     A bid of a failed vendor is left out (not read). A citation repeated in the stage body counts once; a
     passage with a parameter id that is not a contract term, or that states no value, is not evidence,
-    except a CT-16 passage (a disclaimer of the agreement blocks inheritance).
+    except a CT-16 passage (a disclaimer of the agreement blocks inheritance) and a CT-01 passage that
+    excludes or waives LDs (its scope decides the back-to-back LD check, ruling R30).
     Notes on values not believed (pipeline.read_values) are returned as {"file", "param_id", "code", "message"}.
     """
     from antova_ingest.pipeline import read_values  # imported here: the pipeline's contract stage imports this module
@@ -404,7 +428,10 @@ def contract_evidence(verified: Mapping, manifest: TenderManifest,
             notes.extend({"file": file, "param_id": row["param_id"], **n} for n in read_notes)
             # A CT-16 passage that does not read as incorporating the agreement is kept: it may be a disclaimer,
             # which blocks inheritance (_incorporation).
-            if values or row["param_id"] == "CT-16":
+            # A CT-01 passage that excludes or waives LDs is kept too: "LDs are waived during the first two
+            # weeks" states no value, but it limits what the vendor pays back (ruling R30).
+            keep = row["param_id"] == "CT-16" or (row["param_id"] == "CT-01" and NO_LD.search(citation.quote))
+            if values or keep:
                 items.append(Evidence(row["param_id"], citation, values, source=row.get("source", "locator")))
         found[file] = items
     return found, notes

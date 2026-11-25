@@ -525,3 +525,40 @@ def test_term_level_flags_name_no_field():
     term = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": []})[("vendor-a", "CT-03")]
     unread = [f for f in term.flags if f["code"] == "document_not_read"]
     assert unread and all("field" not in f and "source" not in f for f in unread)
+
+
+# --- an LD exclusion passage that states no value (ruling R30) --------------------------------------------
+
+LD_RATE_CAP = "LDs are 0.5% per day, capped at 10% of the order value."
+LD_WAIVER = "LDs are waived during the first two weeks."
+
+
+def test_contract_evidence_keeps_an_ld_exclusion_that_states_no_value():
+    verified = _verified({"bid-a.pdf": [_row("CT-01", "bid-a.pdf", 12, LD_WAIVER),
+                                        _row("CT-01", "bid-a.pdf", 13, "The LD clause is set out in Annex 2.")]})
+    found, _ = contract_evidence(verified, _manifest([BID]), failed_vendors=())
+    assert [(e.param_id, e.citation.page, e.values) for e in found["bid-a.pdf"]] == [("CT-01", 12, {})]
+
+
+def test_an_ld_exclusion_passage_changes_no_resolution():
+    rate = _ev("bid-a.pdf", "CT-01", 9, LD_RATE_CAP)
+    waiver = _ev("bid-a.pdf", "CT-01", 12, LD_WAIVER)
+    assert waiver.values == {}
+    for passages in ([rate], []):
+        manifest = _manifest([BID])
+        before = resolve_contract_terms(manifest, {"bid-a.pdf": passages})
+        after = resolve_contract_terms(manifest, {"bid-a.pdf": [*passages, waiver]})
+        for key, term in before.items():
+            got = after[key]
+            assert (got.offered, got.fa, got.owner, got.state, got.flags) == \
+                   (term.offered, term.fa, term.owner, term.state, term.flags)
+            assert got.ld_exclusion_passages == ((waiver.citation,) if key[1] == "CT-01" else ())
+    alone = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": [waiver]})[("vendor-a", "CT-01")]
+    assert alone.state == "missing" and alone.offered is None  # never "cited" on its own
+
+
+def test_an_ld_exclusion_in_an_unread_offer_is_not_kept():
+    other = DocumentEntry(file="bid-a2.pdf", role="vendor_bid", vendor_id="vendor-a", counterparty_id="cp-a")
+    waiver = _ev("bid-a.pdf", "CT-01", 12, LD_WAIVER)
+    term = resolve_contract_terms(_manifest([BID, other]), {"bid-a.pdf": [waiver]})[("vendor-a", "CT-01")]
+    assert term.ld_exclusion_passages == ()

@@ -8,9 +8,10 @@ import pytest
 
 from antova_ingest.contract_checks import (back_to_back_ld, check_terms, fx_convert, owner_ld_money,
                                            payment_timing, warranty_gap)
-from antova_ingest.contract_terms import ContractTerm, TermSource
+from antova_ingest.contract_terms import ContractTerm, TermSource, contract_evidence, resolve_contract_terms
 from antova_ingest.tests.helpers import evidence
-from antova_ingest.types import BaselineFx, BaselineMoney, Citation, FieldValue, OwnerTerms
+from antova_ingest.types import (BaselineFx, BaselineMoney, Citation, DocumentEntry, FieldValue, OwnerTerms,
+                                 TenderManifest)
 from antova_ingest.values import Milestone
 
 D = Decimal
@@ -493,3 +494,57 @@ def test_back_to_back_ld_without_a_delay_scenario_is_none():
                        ld_cap=D("10"), ld_cap_basis="percent", package_ld_share_pct=D("100"))
     gap = back_to_back_ld(_term("CT-01", _vendor_ld()), owner, (D("2000000"), "EUR"), None)
     assert gap.amount is None and "delay" in gap.reason
+
+
+# --- an LD exclusion cited as its own passage (ruling R30) -------------------------------------------------
+
+def _pipeline_ct01(*passages):
+    """CT-01 for vendor-a, from verified-stage rows on bid-a.pdf, one per (page, quote), as the pipeline reads it."""
+    bid = DocumentEntry(file="bid-a.pdf", role="vendor_bid", vendor_id="vendor-a")
+    manifest = TenderManifest(tender_id="T-1", title="t", client="c", equipment_class="mv_gis_switchgear",
+                              rate_table="mv_gis_switchgear_v2",
+                              documents=[DocumentEntry(file="mr.pdf", role="mr_spec"), bid],
+                              engineering_estimates={}, synthetic=True)
+    rows = [{"param_id": "CT-01", "source": "locator",
+             "citation": Citation("bid-a.pdf", page, (1.0, 2.0, 3.0, 4.0), quote, "commercial").to_dict()}
+            for page, quote in passages]
+    verified = {"locales": {"bid-a.pdf": "en"},
+                "contract": {"citations": {"bid-a.pdf": rows}, "accepted": 0, "rejected": 0, "not_stated": {}}}
+    found, _ = contract_evidence(verified, manifest, failed_vendors=())
+    return resolve_contract_terms(manifest, found)[("vendor-a", "CT-01")]
+
+
+def _pipeline_gap(*passages):
+    return back_to_back_ld(_pipeline_ct01(*passages), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+
+
+LD_RATE_CAP = "LDs are 0.5% per day, capped at 10% of the order value."
+
+
+def test_a_waiver_in_its_own_passage_gives_no_number():
+    gap = _pipeline_gap((9, LD_RATE_CAP), (12, "LDs are waived during the first two weeks."))
+    assert gap.amount is None
+    assert gap.reason == ("the offer limits its liquidated damages ('LDs are waived during the first two weeks.'); "
+                          "check the scope by hand")
+    assert _pipeline_gap((9, LD_RATE_CAP)).amount == D("80000.00")  # without it, the gap is computed
+
+
+def test_a_force_majeure_exclusion_in_its_own_passage_keeps_the_gap_with_the_caveat():
+    gap = _pipeline_gap((9, LD_RATE_CAP), (12, "No liquidated damages apply in case of force majeure."))
+    assert gap.amount == D("80000.00")
+    assert gap.formula.endswith("; assumes the delay is the vendor's (the offer excludes LDs for 'force majeure')")
+
+
+def test_a_whole_offer_exclusion_in_its_own_passage_is_no_lds():
+    # The 0 % cap of "no LDs" is not a plausible value, so the passage states none; it is kept for its scope.
+    term = _pipeline_ct01((12, "No liquidated damages apply."))
+    assert term.offered is None and len(term.ld_exclusion_passages) == 1
+    gap = back_to_back_ld(term, OWNER_MONEY_LD, None, D("4"))
+    assert gap.amount == D("280000.00") and "the offer provides no liquidated damages" in gap.formula
+
+
+def test_a_whole_offer_exclusion_beside_a_stated_rate_is_for_a_person():
+    gap = _pipeline_gap((9, LD_RATE_CAP), (12, "No liquidated damages apply."))
+    assert gap.amount is None
+    assert gap.reason == ("the offer excludes liquidated damages ('No liquidated damages apply.') but an LD rate "
+                          "or cap is also stated for it; a person decides which governs")

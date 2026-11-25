@@ -392,9 +392,20 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
         conflict = _conflict(term, f, "offered")
         if conflict:
             return _unknown(kind, conflict)
-    # An exclusion of LDs from the whole offer (values.no_lds) reads as a 0% cap with base "none": the vendor
-    # pays back nothing. A rate that is only not stated is not this.
-    no_lds = rate is None and cap is not None and cap.qualifier == "none"
+    # Every clause that excludes or waives LDs, in the offer's cited quotes and in its passages kept for their
+    # scope (ContractTerm.ld_exclusion_passages, ruling R30), classified as ruling R29 sets out.
+    quotes = [*(c.quote for c in (term.offered.citations if term.offered is not None else ())),
+              *(c.quote for c in term.ld_exclusion_passages)]
+    exclusions = list({e.clause: e for q in quotes for e in ld_exclusions(q)}.values())
+    # An exclusion of LDs from the whole offer: the vendor pays back nothing. In a quote it reads as a 0% cap
+    # with base "none"; a passage kept for its scope gives no value. Beside a stated LD rate or cap, the two
+    # disagree and a person decides. A rate that is only not stated is not this.
+    whole = next((e for e in exclusions if e.scope == "whole"), None)
+    stated = rate is not None or (cap is not None and cap.qualifier != "none")
+    if whole is not None and stated:
+        return _unknown(kind, f"the offer excludes liquidated damages ('{whole.clause}') but an LD rate or cap is "
+                              f"also stated for it; a person decides which governs")
+    no_lds = (rate is None and cap is not None and cap.qualifier == "none") or (whole is not None and not stated)
     if cap is not None and cap.qualifier == "delayed_portion":
         return _unknown(kind, "the vendor's LD cap is a percentage of the delayed portion, whose value is not known")
     steps = list(money.steps)
@@ -415,12 +426,10 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
                               vendor_provides_no_lds=no_lds)
     if gap.amount is None:
         return gap
-    # An exclusion of LDs from part of the offer, in the quoted clauses (ruling R29). One scoped to force majeure
+    # An exclusion of LDs from part of the offer (rulings R29, R30). One scoped to force majeure
     # or to delays the Buyer causes leaves the gap as computed: the delay scenario is the vendor's delay, and the
     # formula says so. Any other scope (some weeks, a grace period, part of the supply) changes what the vendor
     # pays back in a way the values do not show, so no amount is given.
-    exclusions = [e for c in (term.offered.citations if term.offered is not None else ())
-                  for e in ld_exclusions(c.quote)]
     limited = next((e for e in exclusions if e.scope == "other"), None)
     if limited is not None:
         return _unknown(kind, f"the offer limits its liquidated damages ('{limited.clause}'); check the scope by hand")
