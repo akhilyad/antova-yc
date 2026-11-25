@@ -23,7 +23,6 @@ that pair (`BaselineFx`), with the conversion shown; otherwise it is not compare
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -32,11 +31,12 @@ from typing import Literal
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
 from antova_ingest.contract_terms import ContractTerm, TermSource
 from antova_ingest.exposure import Exposure, _unknown, back_to_back_ld_gap
-from antova_ingest.ontology import FieldDef, ParameterDef
+from antova_ingest.ontology import FieldDef
 from antova_ingest.types import BaselineFx, Citation, FieldValue, OwnerTerms
 from antova_ingest.values import EVENT_LABELS, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only
 
 Baseline = Literal["fa", "owner"]
+SourceName = Literal["offered", "fa", "owner"]  # the "source" key of a field flag (contract_terms, ruling R27)
 
 HUNDRED = Decimal("100")
 _NOT_CHECKED = frozenset({"CT-16", "CT-17"})
@@ -108,24 +108,18 @@ def _label(f: FieldDef) -> str:
     return f.label if f.label[1:2].isupper() else f.label[0].lower() + f.label[1:]
 
 
-def _names(source: TermSource, message: str) -> bool:
-    return any(re.search(r"(?<![\w.\-])" + re.escape(c.filename) + r"(?![\w.\-])", message) for c in source.citations)
-
-
-def _conflict(term: ContractTerm, param: ParameterDef, f: FieldDef, source: TermSource | None) -> str | None:
-    """The conflict note on this field among the documents of `source`, if there is one."""
-    if source is None:
-        return None
+def _conflict(term: ContractTerm, f: FieldDef, source: SourceName) -> str | None:
+    """The conflict note on this field in that source, matched on the flag's "field" and "source" keys only
+    (ruling R27): the message is shown, never read."""
     for note in term.flags:
-        if (note["code"] in _CONFLICT_CODES and note["message"].startswith(f"{param.id} {f.label}:")
-                and _names(source, note["message"])):
+        if note["code"] in _CONFLICT_CODES and note.get("field") == f.name and note.get("source") == source:
             return note["message"]
     return None
 
 
-def _no_offer(term: ContractTerm, param: ParameterDef, f: FieldDef) -> str:
+def _no_offer(term: ContractTerm, f: FieldDef) -> str:
     """Why the offer has no value for the field."""
-    conflict = _conflict(term, param, f, term.offered)
+    conflict = _conflict(term, f, "offered")
     if conflict:
         return conflict
     if f.name == "liability_cap_money" and term.offered is not None and "liability_cap" in term.offered.values:
@@ -181,7 +175,7 @@ def _compare(f: FieldDef, baseline: Baseline, required: FieldValue, offered: Fie
     return passed, shown, ""
 
 
-def _check_field(term: ContractTerm, param: ParameterDef, f: FieldDef, baseline: Baseline, source: TermSource,
+def _check_field(term: ContractTerm, f: FieldDef, baseline: Baseline, source: TermSource,
                  fx: Sequence[BaselineFx]) -> TermCheck | None:
     required = source.values.get(f.name)
     offered_source = term.offered
@@ -191,13 +185,13 @@ def _check_field(term: ContractTerm, param: ParameterDef, f: FieldDef, baseline:
                   required_citations=source.citations,
                   offered_citations=offered_source.citations if offered_source is not None else ())
     if required is None:
-        conflict = _conflict(term, param, f, source)
+        conflict = _conflict(term, f, baseline)
         if conflict is None:
             return None  # the baseline requires nothing here
         return TermCheck(**common, passed=None, required="unresolved", offered=shown_offer, reason=conflict)
     if offered is None:
         return TermCheck(**common, passed=None, required=required.display, offered=shown_offer,
-                         reason=_no_offer(term, param, f))
+                         reason=_no_offer(term, f))
     passed, shown, reason = _compare(f, baseline, required, offered, source, offered_source, fx)
     if f.name in offered_source.inherited_fields:
         shown = f"{shown} (inherited from the framework agreement)"
@@ -216,7 +210,7 @@ def check_terms(terms: Mapping[tuple[str, str], ContractTerm], fx: Sequence[Base
             if source is None:
                 continue
             for f in param.fields:
-                found = _check_field(term, param, f, baseline, source, fx)
+                found = _check_field(term, f, baseline, source, fx)
                 if found is not None:
                     checks.append(found)
     return checks
@@ -232,7 +226,7 @@ def warranty_gap(offered: ContractTerm) -> TermGap:
     """The months of warranty the EPC owes the owner that the vendor does not give, from the same start event.
     A longer vendor warranty is a surplus, shown as 0. Different start events with no dates to bridge them
     are None, never 0."""
-    term, param = offered, CONTRACT_PARAMS_BY_ID["CT-03"]
+    term = offered
     months_field, start_field = _field("CT-03", "warranty_months"), _field("CT-03", "warranty_start")
 
     def unknown(reason: str) -> TermGap:
@@ -242,9 +236,9 @@ def warranty_gap(offered: ContractTerm) -> TermGap:
     owner = term.owner.values if term.owner is not None else {}
     for f in (months_field, start_field):
         if f.name not in vendor:
-            return unknown(_no_offer(term, param, f))
+            return unknown(_no_offer(term, f))
         if f.name not in owner:
-            return unknown(_conflict(term, param, f, term.owner) or f"the owner contract's {_label(f)} is not known")
+            return unknown(_conflict(term, f, "owner") or f"the owner contract's {_label(f)} is not known")
     vendor_start, owner_start = vendor["warranty_start"].value, owner["warranty_start"].value
     if vendor_start != owner_start:
         return unknown(f"the vendor's warranty starts at {EVENT_LABELS[vendor_start]} and the owner warranty at "
@@ -302,13 +296,13 @@ def _timing_gap(offered: Sequence[Milestone], required: Sequence[Milestone], bas
 def payment_timing(offered: ContractTerm) -> TermGap:
     """How many days later (positive) or earlier (negative) the offer pays on average than the FA, weighted by
     each milestone's percentage. Milestones tied to different events, or no FA, are None with the reason."""
-    term, param, f = offered, CONTRACT_PARAMS_BY_ID["CT-07"], _field("CT-07", "milestones")
+    term, f = offered, _field("CT-07", "milestones")
     if term.offered is None or "milestones" not in term.offered.values:
-        return TermGap("payment_timing", None, "days", "", _no_offer(term, param, f))
+        return TermGap("payment_timing", None, "days", "", _no_offer(term, f))
     if not term.fa_present:
         return TermGap("payment_timing", None, "days", "", "no framework agreement is linked to this vendor")
     if term.fa is None or "milestones" not in term.fa.values:
-        reason = _conflict(term, param, f, term.fa) or "the framework agreement states no payment milestones"
+        reason = _conflict(term, f, "fa") or "the framework agreement states no payment milestones"
         unread = [note["message"] for note in term.flags if note["code"] == "document_not_read"]
         return TermGap("payment_timing", None, "days", "", " ".join([reason, *unread]))
     return _timing_gap(term.offered.values["milestones"].value, term.fa.values["milestones"].value,

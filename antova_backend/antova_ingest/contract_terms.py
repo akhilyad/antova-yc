@@ -57,7 +57,9 @@ class ContractTerm:
     fa: TermSource | None
     owner: TermSource | None
     state: State
-    flags: tuple[dict, ...]  # precedence.flag(code, message) dicts
+    # precedence.flag(code, message) dicts. A flag about one field also carries "field" (the field name) and
+    # "source" ("offered", "fa" or "owner"), so a reader matches on those keys, never on the message (ruling R27).
+    flags: tuple[dict, ...]
     # An FA (as amended) is linked to the vendor's counterparty, even if it is silent on this term or was
     # not read (ruling R26). False: no framework agreement for this vendor.
     fa_present: bool
@@ -70,6 +72,17 @@ class _Slot:
     value: FieldValue | None  # None: unresolved (see conflicts)
     citations: list[Citation]
     conflicts: list[dict] = field(default_factory=list)
+
+
+def _field_flag(code: str, message: str, field_name: str, source: str | None = None) -> dict:
+    """A flag about one field. `source` is filled in when the term is assembled (resolve_contract_terms)."""
+    entry = {**flag(code, message), "field": field_name}
+    return entry if source is None else {**entry, "source": source}
+
+
+def _add(flags: list[dict], entry: dict) -> None:
+    if entry not in flags:
+        flags.append(entry)
 
 
 def _same(a: FieldValue | None, b: FieldValue | None) -> bool:
@@ -101,9 +114,9 @@ def _layer(param: ParameterDef, passages: list[Evidence]) -> dict[str, _Slot]:
             slots[f.name] = _Slot(distinct[0].values[f.name], [distinct[0].citation])
             continue
         said = "; ".join(f"{_where(e.citation)} says {e.values[f.name].display}" for e in distinct)
-        slots[f.name] = _Slot(None, [e.citation for e in distinct], [flag(
+        slots[f.name] = _Slot(None, [e.citation for e in distinct], [_field_flag(
             "passages_disagree",
-            f"{param.id} {f.label}: {said}. Neither outranks the other, so a person decides which governs.")])
+            f"{param.id} {f.label}: {said}. Neither outranks the other, so a person decides which governs.", f.name)])
     return slots
 
 
@@ -124,10 +137,10 @@ def _unordered(state: dict[str, _Slot], layer: dict[str, _Slot], param: Paramete
         elif not prior.conflicts and not new.conflicts and _same(prior.value, new.value):
             prior.citations.extend(new.citations)
         else:
-            state[name] = _Slot(None, prior.citations + new.citations, [*prior.conflicts, *new.conflicts, flag(
+            state[name] = _Slot(None, prior.citations + new.citations, [*prior.conflicts, *new.conflicts, _field_flag(
                 "amendment_order_unknown",
                 f"{param.id} {labels[name]}: {reason}, so it is not known whether {_shown(prior)} "
-                f"or {_shown(new)} governs.")])
+                f"or {_shown(new)} governs.", name)])
 
 
 def _order_reason(entry: DocumentEntry, by_file: Mapping[str, DocumentEntry]) -> str | None:
@@ -202,8 +215,8 @@ def owner_term_values(terms: OwnerTerms) -> tuple[dict[str, dict[str, FieldValue
     def put(param_id: str, name: str, value: FieldValue) -> None:
         values.setdefault(param_id, {})[name] = value
 
-    def unmapped(param_id: str, message: str) -> None:
-        flags.setdefault(param_id, []).append(flag("owner_value_not_mapped", message))
+    def unmapped(param_id: str, name: str, message: str) -> None:
+        flags.setdefault(param_id, []).append(_field_flag("owner_value_not_mapped", message, name, "owner"))
 
     if terms.ld_rate is not None:
         unit, period = terms.ld_rate_basis.split("_per_")
@@ -211,14 +224,14 @@ def owner_term_values(terms: OwnerTerms) -> tuple[dict[str, dict[str, FieldValue
             put("CT-01", "ld_rate", FieldValue("rate_per_period", (terms.ld_rate, period),
                                                f"{_dec_text(terms.ld_rate)}% per {period}"))
         else:
-            unmapped("CT-01", f"The owner LD rate is entered as an amount per {period}, not a percentage of the "
+            unmapped("CT-01", "ld_rate", f"The owner LD rate is entered as an amount per {period}, not a percentage of the "
                               f"price; it is used for the back-to-back LD gap, not compared as a rate.")
     if terms.ld_cap is not None:
         if terms.ld_cap_basis == "percent":
             put("CT-01", "ld_cap", FieldValue("percent", float(terms.ld_cap), f"{float(terms.ld_cap):g} %",
                                               qualifier="contract"))
         else:
-            unmapped("CT-01", "The owner LD cap is entered as an amount, not a percentage of the price; it is "
+            unmapped("CT-01", "ld_cap", "The owner LD cap is entered as an amount, not a percentage of the price; it is "
                               "used for the back-to-back LD gap, not compared as a cap.")
     if terms.liability_cap is not None:
         cap = terms.liability_cap
@@ -239,7 +252,7 @@ def owner_term_values(terms: OwnerTerms) -> tuple[dict[str, dict[str, FieldValue
         if law is not None:
             put("CT-14", "law", law)
         else:
-            unmapped("CT-14", f"The owner governing law \"{terms.law}\" is not a law Antova reads; compare it by hand.")
+            unmapped("CT-14", "law", f"The owner governing law \"{terms.law}\" is not a law Antova reads; compare it by hand.")
     return values, flags
 
 
@@ -317,7 +330,7 @@ def resolve_contract_terms(manifest: TenderManifest,
                 owner_source = TermSource("buyer_entered", dict(form_values[param.id]), ())
             if owner.source is None:
                 for f in form_flags.get(param.id, []):
-                    add_flag(flags, f["code"], f["message"])
+                    _add(flags, f)
 
             # Ruling R25: with an incorporation clause, each field the offer is silent on takes the FA's value.
             # A field the offer states, even in conflict, is never filled from the FA.
@@ -346,8 +359,9 @@ def resolve_contract_terms(manifest: TenderManifest,
                     add_flag(flags, "fa_not_linked",
                              "The offer incorporates a framework agreement, but none is linked to this vendor's "
                              "counterparty in the manifest, so the term cannot be inherited.")
-            for conflict in [*offer.conflicts, *fa.conflicts, *owner.conflicts]:
-                add_flag(flags, conflict["code"], conflict["message"])
+            for source, resolved in (("offered", offer), ("fa", fa), ("owner", owner)):
+                for conflict in resolved.conflicts:
+                    _add(flags, {**conflict, "source": source})
             if offer.conflicts or fa.conflicts or owner.conflicts:
                 state = "conflict"
             terms[(vendor_id, param.id)] = ContractTerm(param.id, vendor_id, offered, fa.source, owner_source,

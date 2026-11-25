@@ -495,3 +495,33 @@ def test_owner_contract_amendments():
     undated = resolve_contract_terms(_manifest([BID, OWNER, owner_amd]), evidence_by_file)[("vendor-a", "CT-03")]
     assert undated.state == "conflict"
     assert "amendment_order_unknown" in _codes(undated)
+
+
+# --- ruling R27: a flag about one field names the field and its source ---------------------------------
+
+def _keyed(term, code):
+    return [(f["field"], f["source"]) for f in term.flags if f["code"] == code]
+
+
+def test_field_flags_carry_field_and_source_keys():
+    offer = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": [
+        _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24),
+        _ev("bid-a.pdf", "CT-03", 22, "The warranty period is 36 months from delivery.")]})[("vendor-a", "CT-03")]
+    assert _keyed(offer, "passages_disagree") == [("warranty_months", "offered")]
+
+    manifest = _manifest([BID, FA, AMENDMENT])
+    manifest.documents[-1] = AMENDMENT.model_copy(update={"dated": None})
+    fa = resolve_contract_terms(manifest, {"bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)],
+                                           "fa-a-amd1.pdf": [_ev("fa-a-amd1.pdf", "CT-03", 1, WARRANTY_66)]})
+    assert _keyed(fa[("vendor-a", "CT-03")], "amendment_order_unknown") == [("warranty_months", "fa")]
+
+    owner_terms = OwnerTerms.model_validate({"ld_rate": "10000", "ld_rate_basis": "money_per_day",
+                                             "ld_cap": "500000", "ld_cap_basis": "money"})
+    owner = resolve_contract_terms(_manifest([BID], owner_terms), {"bid-a.pdf": []})[("vendor-a", "CT-01")]
+    assert _keyed(owner, "owner_value_not_mapped") == [("ld_rate", "owner"), ("ld_cap", "owner")]
+
+
+def test_term_level_flags_name_no_field():
+    term = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": []})[("vendor-a", "CT-03")]
+    unread = [f for f in term.flags if f["code"] == "document_not_read"]
+    assert unread and all("field" not in f and "source" not in f for f in unread)

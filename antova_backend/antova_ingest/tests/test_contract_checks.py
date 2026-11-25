@@ -122,7 +122,7 @@ def test_offer_not_read_says_so():
 
 def test_conflict_in_the_offer_is_not_guessed():
     fa = _read("CT-03", "The warranty period is 60 months from delivery.", "fa.pdf")
-    disagree = {"code": "passages_disagree",
+    disagree = {"code": "passages_disagree", "field": "warranty_months", "source": "offered",
                 "message": "CT-03 Warranty months: bid.pdf p.1 says 24; bid.pdf p.2 says 36. Neither outranks the "
                            "other, so a person decides which governs."}
     offer = TermSource("document", {}, (_cite("bid.pdf", 1), _cite("bid.pdf", 2)))
@@ -132,7 +132,7 @@ def test_conflict_in_the_offer_is_not_guessed():
 
 
 def test_conflict_in_the_fa_is_a_check_without_a_requirement():
-    disagree = {"code": "amendment_order_unknown",
+    disagree = {"code": "amendment_order_unknown", "field": "warranty_months", "source": "fa",
                 "message": "CT-03 Warranty months: fa-amd.pdf amends fa.pdf but has no date, so it is not known "
                            "whether 60 or 66 governs."}
     offer = _read("CT-03", "The warranty period is 60 months from delivery.", "bid.pdf")
@@ -143,6 +143,25 @@ def test_conflict_in_the_fa_is_a_check_without_a_requirement():
     # The owner side has no such conflict and no requirement: no owner check is made.
     assert not [c for c in _checks(_term("CT-03", _source("bid.pdf", offer), fa, state="conflict",
                                          flags=[disagree])) if c.baseline == "owner"]
+
+
+def test_conflicts_are_matched_on_their_keys_not_their_wording():
+    """Ruling R27: rewording a flag's message must not change which check it lands on."""
+    fa = _read("CT-03", "The warranty period is 60 months from delivery.", "fa.pdf")
+    offer = TermSource("document", {}, (_cite("bid.pdf", 1), _cite("bid.pdf", 2)))
+    reworded = {"code": "passages_disagree", "field": "warranty_months", "source": "offered",
+                "message": "Two pages of the offer give different warranty periods."}
+    check = _only(_checks(_term("CT-03", offer, _source("fa.pdf", fa), state="conflict", flags=[reworded])),
+                  "fa", "warranty_months")
+    assert check.reason == reworded["message"]
+
+    # A message worded exactly like a conflict on this field, but keyed to another field or source, is not one.
+    for field, source in (("warranty_start", "offered"), ("warranty_months", "owner")):
+        decoy = {"code": "passages_disagree", "field": field, "source": source,
+                 "message": "CT-03 Warranty months: bid.pdf p.1 says 24; bid.pdf p.2 says 36."}
+        check = _only(_checks(_term("CT-03", offer, _source("fa.pdf", fa), state="conflict", flags=[decoy])),
+                      "fa", "warranty_months")
+        assert check.reason == "the offer does not state the warranty months"
 
 
 def test_fa_silent_or_absent_produces_no_fa_check():
