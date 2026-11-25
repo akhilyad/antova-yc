@@ -601,8 +601,11 @@ _CAP_AFTER = re.compile(r"^\s*(?:of\s+[^.;,]{0,40}?\s+)?(?:maximum|cap\b|in\s+to
                         re.IGNORECASE)
 _LD_CONTEXT = re.compile(r"liquidated|\bLDs?\b|delay\s+damages|late\s+delivery|penalt", re.IGNORECASE)
 _LIABILITY_CONTEXT = re.compile(r"liabilit", re.IGNORECASE)
+# "Without prejudice to …" is not an exclusion, nor is an "excludes …" whose object is not LDs ("The price
+# excludes taxes and liquidated damages are 0.5% per day"; Task 6 review r5).
 NO_LD = re.compile(
-    r"\b(?:no|without|excludes?|excluded|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
+    r"\b(?:no|without(?!\s+prejudice)|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
+    r"\bexclude[sd]?\b(?:(?!\b(?:and|or)\b|&)[^.;]){0,40}liquidated|"
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
     r"\bno\s+LDs?\b|\bLDs?\s+(?:(?:are|is|shall\s+be|will\s+be)\s+)?(?:excluded|waived|not\s+applicable)|"
     r"\bLDs?\s+(?:do(?:es)?|shall|will)\s+not\s+apply", re.IGNORECASE)
@@ -644,6 +647,20 @@ _LD_CAUSE_HEAD = re.compile(r"\s*(?:(?:" + _WHOLE_CONTRACT + "|" + _LD_CAUSE + r
 _LD_CAUSE_TAIL = re.compile(_NO_LD_WORDS + r"(?:\s*,?\s*(?:" + _WHOLE_CONTRACT + "|" + _LD_CAUSE + r"))*\s*[.!]?\s*",
                             re.IGNORECASE)
 _LEADING_PREP = re.compile(r"^" + _LD_CAUSE_PREP + r"\s+", re.IGNORECASE)
+# NO_LD with nothing but the exclusion's own words inside the match (Task 6 review r5): NO_LD lets free text
+# stand between the exclusion word and "liquidated", or between "liquidated" and "waived/excluded", so that a
+# scope there ("Liquidated damages for the first two weeks are waived") is still seen as an exclusion. "Delay"
+# before "liquidated damages" and "for delay" after it name the LDs, they do not scope them ("Liquidated damages
+# for delay are excluded"). Only a match of this strict form can be "whole" or "cause"; any other NO_LD match
+# is "other".
+_NO_LD_STRICT = re.compile(
+    r"\b(?:no|without|exclude[sd]?|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\s+(?:to\s+)?"
+    r"(?:(?:any|all|the)\s+)?liquidated|"
+    r"(?:\bdelay\s+)?liquidated\s+damages?\b(?:\s*\(\s*(?:the\s+)?LDs?\s*\))?(?:\s+for\s+(?:any\s+)?delays?\b)?\s*:?"
+    r"(?:\s+(?:are|is|shall|will|hereby|be|been|have|has))*\s+"
+    r"(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
+    r"\bno\s+LDs?\b|\bLDs?\s+(?:(?:are|is|shall\s+be|will\s+be)\s+)?(?:excluded|waived|not\s+applicable)|"
+    r"\bLDs?\s+(?:do(?:es)?|shall|will)\s+not\s+apply", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -658,9 +675,11 @@ class LdExclusion:
 
 def ld_exclusion(clause: str) -> LdExclusion | None:
     """How one clause (no ";" inside) excludes LDs, or None when it does not (ruling R29)."""
-    m = NO_LD.search(clause)
-    if not m:
+    if not NO_LD.search(clause):
         return None
+    m = _NO_LD_STRICT.search(clause)
+    if not m:  # a scope inside the exclusion's own words
+        return LdExclusion(clause.strip(), "other")
     head, tail = clause[:m.start()], clause[m.end():]
     if _NO_LD_HEAD.fullmatch(head) and _NO_LD_TAIL.fullmatch(tail):
         return LdExclusion(clause.strip(), "whole")
@@ -684,9 +703,10 @@ def no_lds(sentence: str) -> bool:
     m = NO_LD.search(sentence)
     if not m:
         return False
-    head = sentence[:m.start()].rsplit(";", 1)[-1]
-    tail = sentence[m.end():].split(";", 1)[0]
-    return bool(_NO_LD_HEAD.fullmatch(head) and _NO_LD_TAIL.fullmatch(tail))
+    start = sentence.rfind(";", 0, m.start()) + 1
+    end = sentence.find(";", m.end())
+    exclusion = ld_exclusion(sentence[start:] if end < 0 else sentence[start:end])
+    return exclusion is not None and exclusion.scope == "whole"
 
 
 _PER_WEEK_FACTOR = {"week": 1.0, "day": 7.0, "month": 12 / 52}

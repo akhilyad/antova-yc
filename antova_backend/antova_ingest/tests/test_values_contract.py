@@ -526,3 +526,41 @@ def test_no_lds_beside_a_stated_ld_percentage_is_not_read():
 def test_a_waived_clause_names_no_ld_trigger(quote, expected):
     value = parse_field("scope", quote, "ld_triggers")
     assert (value.value if value else None) == expected
+
+
+# --- a scope inside the exclusion's own words; false exclusions (Task 6 review r5) --------------------------
+
+INNER_SCOPE = [
+    "Liquidated damages for the first two weeks are waived.",
+    "Liquidated damages for Buyer-caused delays are waived.",
+    "No delay in the first two weeks gives liquidated damages.",
+]
+
+
+@pytest.mark.parametrize("sentence", INNER_SCOPE)
+def test_a_scope_inside_the_exclusion_is_not_no_lds(sentence):
+    (found,) = ld_exclusions(sentence)
+    assert found.scope == "other"
+    assert no_lds(sentence) is False
+    for name in ("ld_rate", "ld_cap"):
+        assert parse_field("percent", sentence, name) is None  # never 0 % "none"
+    assert parse_field("scope", sentence, "ld_triggers") is None
+
+
+@pytest.mark.parametrize("sentence", ["Liquidated damages for delay are excluded.",
+                                      "Delay liquidated damages are excluded."])
+def test_delay_names_the_lds_and_does_not_scope_them(sentence):
+    assert ld_exclusions(sentence)[0].scope == "whole" and no_lds(sentence) is True
+    cap = parse_field("percent", sentence, "ld_cap")
+    assert (cap.value, cap.qualifier) == (0.0, "none")
+
+
+@pytest.mark.parametrize("quote", [
+    "Without prejudice to clause 5, liquidated damages apply at 0.5% per day, capped at 10% of the order value.",
+    "The price excludes taxes and liquidated damages are 0.5% per day, capped at 10% of the order value.",
+])
+def test_wording_that_does_not_exclude_lds_is_not_an_exclusion(quote):
+    assert ld_exclusions(quote) == [] and no_lds(quote) is False
+    assert parse_field("rate_per_period", quote, "ld_rate").value == (Decimal("0.5"), "day")
+    cap = parse_field("percent", quote, "ld_cap")
+    assert (cap.value, cap.qualifier) == (10.0, "contract")

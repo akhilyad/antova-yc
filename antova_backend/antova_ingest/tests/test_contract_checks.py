@@ -548,3 +548,37 @@ def test_a_whole_offer_exclusion_beside_a_stated_rate_is_for_a_person():
     assert gap.amount is None
     assert gap.reason == ("the offer excludes liquidated damages ('No liquidated damages apply.') but an LD rate "
                           "or cap is also stated for it; a person decides which governs")
+
+
+# --- a scope inside the exclusion's own words; false exclusions (Task 6 review r5) --------------------------
+
+INNER_SCOPE = [
+    "Liquidated damages for the first two weeks are waived.",
+    "Liquidated damages for Buyer-caused delays are waived.",
+    "No delay in the first two weeks gives liquidated damages.",
+]
+
+
+@pytest.mark.parametrize("sentence", INNER_SCOPE)
+def test_a_scope_inside_the_exclusion_alone_is_never_a_number(sentence):
+    # Before: scope "whole", EUR 280,000.00 "the offer provides no liquidated damages".
+    term = _pipeline_ct01((9, sentence))
+    assert term.state == "missing" and term.offered is None and len(term.ld_exclusion_passages) == 1
+    gap = back_to_back_ld(term, OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None and gap.reason == "not known: the vendor's LD rate, the vendor's LD cap"
+
+
+@pytest.mark.parametrize("sentence", INNER_SCOPE)
+def test_a_scope_inside_the_exclusion_beside_a_rate_gives_no_number(sentence):
+    for gap in (_pipeline_gap((9, LD_RATE_CAP), (12, sentence)), _gap(sentence + RATE)):
+        assert gap.amount is None
+        assert gap.reason == f"the offer limits its liquidated damages ('{sentence}'); check the scope by hand"
+
+
+@pytest.mark.parametrize("quote", [
+    "Without prejudice to clause 5, liquidated damages apply at 0.5% per day, capped at 10% of the order value.",
+    "The price excludes taxes and liquidated damages are 0.5% per day, capped at 10% of the order value.",
+])
+def test_wording_that_does_not_exclude_lds_keeps_the_gap(quote):
+    gap = _gap(quote)
+    assert gap.amount == D("80000.00") and "assumes" not in gap.formula
