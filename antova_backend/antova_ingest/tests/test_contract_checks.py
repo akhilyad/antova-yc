@@ -338,6 +338,29 @@ def test_offer_with_no_lds_leaves_the_whole_owner_amount():
     assert back_to_back_ld(_term("CT-01", unstated), owner, (D("2000000"), "EUR"), D("4")).amount is None
 
 
+OWNER_MONEY_LD = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_basis="money_per_day",
+                            ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))
+
+
+def test_scoped_ld_exclusion_is_not_no_lds():
+    buyer = _read("CT-01", 'Liquidated damages are not applicable to delays caused by the Buyer. LDs apply at the framework agreement rate, capped at 10% of the order value.', "bid.pdf")
+    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", buyer)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None and gap.reason == "not known: the vendor's LD rate"
+    fm = _read("CT-01", 'No liquidated damages shall apply to delays caused by force majeure. LDs are 0.5% per day, capped at 10% of the order value.', "bid.pdf")
+    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", fm)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount == D("80000.00")  # 280,000 owed − min(0.5% × 28 days, 10% cap) × 2,000,000 = 200,000
+    assert "no liquidated damages" not in gap.formula
+
+
+def test_ld_rate_in_conflict_never_takes_the_no_lds_path():
+    offer = _source("bid.pdf", {"ld_cap": FieldValue("percent", 0.0, "0 %", qualifier="none")})
+    disagree = {"code": "passages_disagree", "field": "ld_rate", "source": "offered",
+                "message": "CT-01 LD rate: bid.pdf p.3 says 0.5% per day; bid.pdf p.9 says 1% per week."}
+    gap = back_to_back_ld(_term("CT-01", offer, state="conflict", flags=[disagree]), OWNER_MONEY_LD,
+                          (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None and gap.reason == disagree["message"]
+
+
 def test_owner_ld_in_money_needs_no_conversion():
     owner = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_basis="money_per_day",
                        ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))

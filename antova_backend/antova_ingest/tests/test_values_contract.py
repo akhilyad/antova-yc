@@ -4,7 +4,9 @@ from decimal import Decimal
 
 from antova_ingest.ontology import ORDINALS, FieldDef
 from antova_ingest.types import FieldValue
-from antova_ingest.values import Milestone, check, parse_field, per_week, value_in_span
+import pytest
+
+from antova_ingest.values import Milestone, check, no_lds, parse_field, per_week, value_in_span
 
 
 def fv(kind, value):
@@ -363,3 +365,36 @@ def test_price_basis_and_credit_insurance():
     v = parse_field("money_cap", "secured value of EUR 2,000,000 under the credit insurance policy",
                     "credit_secured_value")
     assert v.value == Decimal("2000000") and v.qualifier == "EUR"
+
+
+
+# --- an LD exclusion scoped to some delays is not "no LDs" (Task 6 review r2) ----------------------------
+
+SCOPED_BUYER = 'Liquidated damages are not applicable to delays caused by the Buyer. LDs apply at the framework agreement rate, capped at 10% of the order value.'
+SCOPED_FM = 'No liquidated damages shall apply to delays caused by force majeure. LDs are 0.5% per day, capped at 10% of the order value.'
+
+
+def test_ld_exclusion_scoped_to_buyer_delay_keeps_the_stated_cap():
+    cap = parse_field("percent", SCOPED_BUYER, "ld_cap")
+    assert (cap.value, cap.qualifier) == (10.0, "contract")
+    assert parse_field("rate_per_period", SCOPED_BUYER, "ld_rate") is None  # "the framework agreement rate"
+
+
+def test_ld_exclusion_scoped_to_force_majeure_keeps_rate_and_cap():
+    assert parse_field("rate_per_period", SCOPED_FM, "ld_rate").value == (Decimal("0.5"), "day")
+    cap = parse_field("percent", SCOPED_FM, "ld_cap")
+    assert (cap.value, cap.qualifier) == (10.0, "contract")
+
+
+@pytest.mark.parametrize("sentence, whole_offer", [
+    ("Liquidated damages are excluded.", True),
+    ("No liquidated damages apply.", True),
+    ("LDs not applicable to this offer.", True),
+    ("Liquidated damages are not accepted for this order.", True),
+    ("Liquidated damages are not applicable to delays caused by the Buyer.", False),
+    ("No liquidated damages shall apply to delays caused by force majeure.", False),
+    ("No LDs in case of force majeure.", False),
+    ("For Buyer-caused delay, liquidated damages are waived.", False),
+])
+def test_no_lds_is_an_exclusion_of_the_whole_offer(sentence, whole_offer):
+    assert no_lds(sentence) is whole_offer

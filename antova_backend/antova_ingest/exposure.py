@@ -133,7 +133,9 @@ def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share
 
     Owed: min(owner rate per day × days, owner cap) × the package's share of owner LDs. Paid back:
     min(order value × vendor rate × days, order value × vendor cap), a weekly rate applied as rate × days / 7.
-    Never below zero; rounded to the cent only at the end. The caller passes the delay scenario in days
+    Owed and paid back are each worked out exactly, then rounded half up to the cent, and the gap is
+    max(owed − paid back, 0) of those two figures (ruling R28), so the formula on the sheet adds up; it is
+    at most a cent from the gap of the unrounded figures. The caller passes the delay scenario in days
     (weeks × 7) and may pass `delay_weeks` to show that conversion. `currency` is that of every amount passed;
     there is no default. `vendor_provides_no_lds`: the offer explicitly excludes LDs, so the vendor pays back
     nothing and its rate, cap and the order value are not needed; an offer that only does not state a rate is
@@ -153,13 +155,13 @@ def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share
         return _unknown(kind, f"the vendor's LD rate is per {period}, not per day or per week")
     if days < 0:
         return _unknown(kind, "the delay to assume is negative")
-    owed = min(owner_rate * days, owner_cap) * share / HUNDRED
+    owed = _euros(min(owner_rate * days, owner_cap) * share / HUNDRED)
     if vendor_provides_no_lds:
         pays = Decimal("0")
         paid_back = f"paid back by the vendor: {_money(currency, pays)} (the offer provides no liquidated damages)"
     else:
         rate_for_delay = rate * days if period == "day" else rate * days / 7
-        pays = min(po * rate_for_delay / HUNDRED, po * cap / HUNDRED)
+        pays = _euros(min(po * rate_for_delay / HUNDRED, po * cap / HUNDRED))
         times = f"{_n(days)} days" if period == "day" else f"{_n(days)}/7 weeks"
         paid_back = (f"paid back by the vendor: min({_n(rate)}% per {period} × {times}, {_n(cap)}% cap) × "
                      f"{_money(currency, po)} = {_money(currency, pays)}")
@@ -169,22 +171,23 @@ def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share
         f"{_money(currency, owner_cap)} cap) × {_n(share)}% share = {_money(currency, owed)}",
         paid_back,
         f"gap max({_money(currency, owed)} − {_money(currency, pays)}, 0) = {_money(currency, gap)}"])
-    return Exposure(kind, _euros(gap), formula)
+    return Exposure(kind, gap, formula)
 
 
 def liability_back_to_back(owner_required_money, vendor_cap_pct, po_value, *, currency: str,
                            conversions: tuple[str, ...] = ()) -> Exposure:
     """The part of the liability the EPC owes the owner that the vendor's cap (a percentage of its order) does
-    not carry: owner amount − order value × cap, never below zero."""
+    not carry: owner amount − order value × cap, never below zero. Both figures are rounded half up to the
+    cent before the difference (ruling R28), so the formula adds up."""
     kind = "back_to_back_liability"
     owner, cap, po = _dec(owner_required_money), _dec(vendor_cap_pct), _dec(po_value)
     missing = [name for name, v in (("the owner liability cap", owner), ("the vendor's liability cap", cap),
                                     ("the order value", po)) if v is None]
     if missing:
         return _unknown(kind, "not known: " + ", ".join(missing))
-    carried = po * cap / HUNDRED
+    owner, carried = _euros(owner), _euros(po * cap / HUNDRED)
     gap = max(owner - carried, Decimal("0"))
     formula = "; ".join([*conversions,
         f"gap max(owner cap {_money(currency, owner)} − vendor {_n(cap)}% × {_money(currency, po)} "
         f"({_money(currency, carried)}), 0) = {_money(currency, gap)}"])
-    return Exposure(kind, _euros(gap), formula)
+    return Exposure(kind, gap, formula)

@@ -604,6 +604,23 @@ NO_LD = re.compile(
     r"\b(?:no|without|excludes?|excluded|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
     r"\bno\s+LDs?\b|\bLDs?\s+(?:excluded|waived|not\s+applicable)", re.IGNORECASE)
+# An exclusion scoped to some delays or causes ("not applicable to delays caused by the Buyer", "no LDs in
+# case of force majeure") is not "no LDs": the offer may still state a rate and a cap for every other delay.
+# "to this offer" (or order, contract) is the whole offer, so it is still an exclusion of all LDs.
+_LD_SCOPE = re.compile(
+    r"\b(?:to|for|in\s+(?:case|the\s+event|respect)\s+of|caused\s+by|due\s+to|arising|resulting|attributable|"
+    r"where|if|when|unless|except|save)\b"
+    r"(?!\s+(?:this|the|our|its)\s+(?:offer|order|purchase\s+order|contract|agreement|quotation|proposal|tender)\b)",
+    re.IGNORECASE)
+
+
+def no_lds(sentence: str) -> bool:
+    """Whether the sentence excludes liquidated damages from the whole offer (NO_LD, with no scope to particular
+    delays or causes before or after the wording)."""
+    m = NO_LD.search(sentence)
+    return bool(m) and not (_LD_SCOPE.search(sentence[:m.start()]) or _LD_SCOPE.search(sentence[m.end():]))
+
+
 _PER_WEEK_FACTOR = {"week": 1.0, "day": 7.0, "month": 12 / 52}
 _CAP_BASIS = (("delayed_portion", re.compile(r"delayed|undelivered|late(?:ly)?\s+delivered|affected", re.IGNORECASE)),
               ("contract", re.compile(r"contract|order|total\s+(?:price|value)", re.IGNORECASE)))
@@ -673,7 +690,7 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
     """One percentage, chosen by the field: `ld_rate` (per week; per day or month is converted),
     `ld_cap` (a maximum on liquidated damages), `liability_cap` (a limit on total liability), a bond's
     value (`warranty_bond_pct`, `performance_bond_pct`, `advance_bond_pct`) or `termination_fee_pct`.
-    "No liquidated damages" reads as 0 for both LD fields. A percentage written with a decimal comma
+    "No liquidated damages" (for the whole offer, `no_lds`) reads as 0 for both LD fields. A percentage written with a decimal comma
     ("7,5 %", which matches as "5 %") is not read: None, never a value a tenth or ten times off."""
     if not require_context:
         m = _PERCENT.search(quote)
@@ -681,7 +698,7 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
     if field_name == "termination_fee_pct":
         return _termination_fee(quote)
     sentences = split_sentences(quote)
-    if field_name in ("ld_rate", "ld_cap") and any(NO_LD.search(s) for s in sentences):
+    if field_name in ("ld_rate", "ld_cap") and any(no_lds(s) for s in sentences):
         return FieldValue("percent", 0.0, "0 %", qualifier="none")
     for sentence in sentences:
         for clause in _clauses(sentence):
@@ -1139,7 +1156,7 @@ def _ld_triggers(quote: str) -> FieldValue | None:
     """The milestones whose delay triggers LDs: "late delivery and/or any late Cold Commissioning and/or Hot
     Commissioning" -> (delivery, cold_commissioning, hot_commissioning)."""
     text = _flat(quote)
-    if NO_LD.search(text):
+    if any(no_lds(s) for s in split_sentences(text)):
         return None
     found = set()
     # Clause by clause: a clause that negates or excludes ("LDs are not applicable to late delivery", "delays

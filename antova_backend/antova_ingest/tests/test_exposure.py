@@ -217,6 +217,16 @@ def test_shown_steps_round_like_the_result():
     assert "share = EUR 0.01" in e.formula and "max(EUR 0.01 − EUR 0.00, 0) = EUR 0.01" in e.formula
 
 
+def test_gap_is_taken_from_the_rounded_figures_so_the_formula_adds_up():
+    # Ruling R28: owed 100.005 -> 100.01 and paid back 50.004 -> 50.00 are rounded first; the gap is their
+    # difference (the exact 50.001 would round to 50.00 beside "100.01 − 50.00").
+    e = back_to_back_ld_gap(100.005, 1e6, 100, (0.5, "day"), 100, 10000.8, 1, currency="EUR")
+    assert e.amount == D("50.01")
+    assert "max(EUR 100.01 − EUR 50.00, 0) = EUR 50.01" in e.formula
+    liability = liability_back_to_back(D("100.005"), D("0.5"), D("10000.8"), currency="EUR")
+    assert liability.amount == D("50.01") and "= EUR 50.01" in liability.formula
+
+
 def test_vendor_with_no_lds_pays_back_nothing():
     e = back_to_back_ld_gap(D("10000"), D("1000000"), D("50"), None, None, None, D("28"), currency="EUR",
                             vendor_provides_no_lds=True)

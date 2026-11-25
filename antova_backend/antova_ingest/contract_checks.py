@@ -386,8 +386,13 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
         return _unknown(kind, money.reason)
     offered = term.offered.values if term.offered is not None else {}
     rate, cap = offered.get("ld_rate"), offered.get("ld_cap")
-    # An explicit "no liquidated damages" reads as a 0% cap with base "none" (values.NO_LD): the vendor pays
-    # back nothing. A rate that is only not stated is not this.
+    # A rate or cap whose passages disagree is unknown, whatever else the offer says (R27 keys).
+    for f in (_field("CT-01", "ld_rate"), _field("CT-01", "ld_cap")):
+        conflict = _conflict(term, f, "offered")
+        if conflict:
+            return _unknown(kind, conflict)
+    # An exclusion of LDs from the whole offer (values.no_lds) reads as a 0% cap with base "none": the vendor
+    # pays back nothing. A rate that is only not stated is not this.
     no_lds = rate is None and cap is not None and cap.qualifier == "none"
     if cap is not None and cap.qualifier == "delayed_portion":
         return _unknown(kind, "the vendor's LD cap is a percentage of the delayed portion, whose value is not known")
