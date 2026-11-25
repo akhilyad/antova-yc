@@ -24,7 +24,7 @@ that pair (`BaselineFx`), with the conversion shown; otherwise it is not compare
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Literal
 
@@ -33,7 +33,8 @@ from antova_ingest.contract_terms import ContractTerm, TermSource
 from antova_ingest.exposure import Exposure, _euros, _unknown, back_to_back_ld_gap
 from antova_ingest.ontology import FieldDef
 from antova_ingest.types import BaselineFx, Citation, FieldValue, OwnerTerms
-from antova_ingest.values import EVENT_LABELS, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only
+from antova_ingest.values import (EVENT_LABELS, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only,
+                                  ld_exclusions)
 
 Baseline = Literal["fa", "owner"]
 SourceName = Literal["offered", "fa", "owner"]  # the "source" key of a field flag (contract_terms, ruling R27)
@@ -405,10 +406,26 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
         owner_rate, owner_cap, currency = rate_c.amount, cap_c.amount, po_value[1]
         steps += [f"owner LD rate per day: {rate_c.formula}", f"owner LD cap: {cap_c.formula}"]
     weeks = None if delay_weeks is None else Decimal(str(delay_weeks))
-    return back_to_back_ld_gap(owner_rate, owner_cap, owner.package_ld_share_pct if owner else None,
-                               rate.value if rate is not None else None,
-                               Decimal(str(cap.value)) if cap is not None else None,
-                               po_value[0] if po_value is not None else None,
-                               weeks * 7 if weeks is not None else None,
-                               delay_weeks=weeks, currency=currency, conversions=tuple(steps),
-                               vendor_provides_no_lds=no_lds)
+    gap = back_to_back_ld_gap(owner_rate, owner_cap, owner.package_ld_share_pct if owner else None,
+                              rate.value if rate is not None else None,
+                              Decimal(str(cap.value)) if cap is not None else None,
+                              po_value[0] if po_value is not None else None,
+                              weeks * 7 if weeks is not None else None,
+                              delay_weeks=weeks, currency=currency, conversions=tuple(steps),
+                              vendor_provides_no_lds=no_lds)
+    if gap.amount is None:
+        return gap
+    # An exclusion of LDs from part of the offer, in the quoted clauses (ruling R29). One scoped to force majeure
+    # or to delays the Buyer causes leaves the gap as computed: the delay scenario is the vendor's delay, and the
+    # formula says so. Any other scope (some weeks, a grace period, part of the supply) changes what the vendor
+    # pays back in a way the values do not show, so no amount is given.
+    exclusions = [e for c in (term.offered.citations if term.offered is not None else ())
+                  for e in ld_exclusions(c.quote)]
+    limited = next((e for e in exclusions if e.scope == "other"), None)
+    if limited is not None:
+        return _unknown(kind, f"the offer limits its liquidated damages ('{limited.clause}'); check the scope by hand")
+    causes = tuple(dict.fromkeys(c for e in exclusions if e.scope == "cause" for c in e.causes))
+    if causes:
+        scope = " and ".join(f"'{c}'" for c in causes)
+        gap = replace(gap, formula=f"{gap.formula}; assumes the delay is the vendor's (the offer excludes LDs for {scope})")
+    return gap

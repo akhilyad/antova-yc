@@ -4,6 +4,8 @@ payment-timing gaps (Task 6)."""
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from antova_ingest.contract_checks import (back_to_back_ld, check_terms, fx_convert, owner_ld_money,
                                            payment_timing, warranty_gap)
 from antova_ingest.contract_terms import ContractTerm, TermSource
@@ -342,20 +344,95 @@ OWNER_MONEY_LD = OwnerTerms(contract_value=EUR_10M, ld_rate=D("10000"), ld_rate_
                             ld_cap=D("1000000"), ld_cap_basis="money", package_ld_share_pct=D("100"))
 
 
+def _quoted(quote, file="bid.pdf"):
+    """An offer whose one citation is the quote itself, with the values the parsers read from it."""
+    return TermSource("document", _read("CT-01", quote, file),
+                      (Citation(file, 1, (0.0, 0.0, 1.0, 1.0), quote, "commercial"),))
+
+
+def _gap(quote):
+    return back_to_back_ld(_term("CT-01", _quoted(quote)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+
+
+RATE = " LDs are 0.5% per day, capped at 10% of the order value."
+
+
 def test_scoped_ld_exclusion_is_not_no_lds():
-    buyer = _read("CT-01", 'Liquidated damages are not applicable to delays caused by the Buyer. LDs apply at the framework agreement rate, capped at 10% of the order value.', "bid.pdf")
-    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", buyer)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    gap = _gap('Liquidated damages are not applicable to delays caused by the Buyer. LDs apply at the framework agreement rate, capped at 10% of the order value.')
     assert gap.amount is None and gap.reason == "not known: the vendor's LD rate"
-    fm = _read("CT-01", 'No liquidated damages shall apply to delays caused by force majeure. LDs are 0.5% per day, capped at 10% of the order value.', "bid.pdf")
-    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", fm)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    gap = _gap('No liquidated damages shall apply to delays caused by force majeure.' + RATE)
     assert gap.amount == D("80000.00")  # 280,000 owed − min(0.5% × 28 days, 10% cap) × 2,000,000 = 200,000
     assert "no liquidated damages" not in gap.formula
+    assert gap.formula.endswith("; assumes the delay is the vendor's "
+                                "(the offer excludes LDs for 'delays caused by force majeure')")
 
 
 def test_a_waiver_for_some_weeks_is_not_a_full_gap():
-    offer = _read("CT-01", 'Liquidated damages are waived during the first two weeks of delay. LDs are 0.5% per day, capped at 10% of the order value.', "bid.pdf")
-    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", offer)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
-    assert gap.amount == D("80000.00")  # not 280,000 "the offer provides no liquidated damages"
+    # Ruling R29: the vendor pays only for days 15–28, which the values do not show; no number, not 80,000.
+    sentence = 'Liquidated damages are waived during the first two weeks of delay.'
+    gap = _gap(sentence + RATE)
+    assert gap.amount is None
+    assert gap.reason == f"the offer limits its liquidated damages ('{sentence}'); check the scope by hand"
+
+
+# --- an LD exclusion with words before it (Task 6 review r4, ruling R29) -----------------------------------
+
+HEAD_PROBES = [
+    "During the first two weeks no LDs apply.",
+    "In case of force majeure no liquidated damages shall apply.",
+    "For Buyer-caused delays no LDs apply.",
+    "Except for late commissioning no liquidated damages apply.",
+    "Where the delay is caused by the Buyer no LDs apply.",
+]
+
+
+@pytest.mark.parametrize("sentence", HEAD_PROBES)
+def test_an_exclusion_after_other_words_alone_is_not_known(sentence):
+    # Before: 280,000.00 "the offer provides no liquidated damages", overriding any FA rate.
+    gap = _gap(sentence)
+    assert gap.amount is None and gap.reason == "not known: the vendor's LD rate, the vendor's LD cap"
+
+
+@pytest.mark.parametrize("sentence, scope", [
+    ("In case of force majeure no liquidated damages shall apply.", "'force majeure'"),
+    ("For Buyer-caused delays no LDs apply.", "'Buyer-caused delays'"),
+    ("Where the delay is caused by the Buyer no LDs apply.", "'Where the delay is caused by the Buyer'"),
+    ("No LDs in force majeure situations.", "'force majeure situations'"),
+    ("Liquidated damages are not applicable to delays attributable to the Purchaser.",
+     "'delays attributable to the Purchaser'"),
+])
+def test_an_exclusion_for_delays_the_vendor_does_not_cause_keeps_the_gap(sentence, scope):
+    gap = _gap(sentence + RATE)
+    assert gap.amount == D("80000.00")
+    assert f"; assumes the delay is the vendor's (the offer excludes LDs for {scope})" in gap.formula
+
+
+def test_a_buyer_caused_head_keeps_the_gap_with_the_caveat():
+    gap = _gap("Where the delay is caused by the Buyer no LDs apply. LDs are 0.5% per day, capped at 10% of the order value.")
+    assert gap.amount == D("80000.00")
+    assert gap.formula.endswith("; assumes the delay is the vendor's "
+                                "(the offer excludes LDs for 'Where the delay is caused by the Buyer')")
+
+
+@pytest.mark.parametrize("sentence", [
+    "During the first two weeks no LDs apply.",
+    "Except for late commissioning no liquidated damages apply.",
+    "Liquidated damages are not applicable before the end of the grace period.",
+    "Liquidated damages are not applicable to the spare parts.",
+    "Liquidated damages are not applicable to the order's spare parts.",
+    "No liquidated damages apply to the contract options.",
+    "LDs are waived for force majeure and during the first week.",
+])
+def test_an_exclusion_with_any_other_scope_gives_no_number(sentence):
+    gap = _gap(sentence + RATE)
+    assert gap.amount is None
+    assert gap.reason == f"the offer limits its liquidated damages ('{sentence}'); check the scope by hand"
+
+
+def test_an_exclusion_from_this_offer_leaves_the_whole_owner_amount():
+    gap = _gap("Liquidated damages are excluded from this offer.")
+    assert gap.amount == D("280000.00") and "the offer provides no liquidated damages" in gap.formula
+    assert "assumes" not in gap.formula
 
 
 def test_ld_rate_in_conflict_never_takes_the_no_lds_path():

@@ -6,7 +6,7 @@ from antova_ingest.ontology import ORDINALS, FieldDef
 from antova_ingest.types import FieldValue
 import pytest
 
-from antova_ingest.values import Milestone, check, no_lds, parse_field, per_week, value_in_span
+from antova_ingest.values import Milestone, check, ld_exclusions, no_lds, parse_field, per_week, value_in_span
 
 
 def fv(kind, value):
@@ -440,6 +440,75 @@ def test_a_waiver_for_some_weeks_keeps_the_stated_rate_and_cap():
     assert parse_field("rate_per_period", WAIVED_2W, "ld_rate").value == (Decimal("0.5"), "day")
     cap = parse_field("percent", WAIVED_2W, "ld_cap")
     assert (cap.value, cap.qualifier) == (10.0, "contract")
+
+
+# --- words before the exclusion, and whole-contract wording (Task 6 review r4, ruling R29) -----------------
+
+HEAD_PROBES = [
+    "During the first two weeks no LDs apply.",
+    "In case of force majeure no liquidated damages shall apply.",
+    "For Buyer-caused delays no LDs apply.",
+    "Except for late commissioning no liquidated damages apply.",
+    "Where the delay is caused by the Buyer no LDs apply.",
+]
+
+
+@pytest.mark.parametrize("sentence", HEAD_PROBES)
+def test_an_exclusion_after_other_words_is_not_no_lds(sentence):
+    assert no_lds(sentence) is False
+    for name in ("ld_rate", "ld_cap"):
+        assert parse_field("percent", sentence, name) is None  # alone: unknown, never 0 % "none"
+
+
+@pytest.mark.parametrize("sentence", HEAD_PROBES)
+def test_an_exclusion_after_other_words_keeps_the_stated_rate_and_cap(sentence):
+    quote = sentence + " LDs are 0.5% per day, capped at 10% of the order value."
+    assert parse_field("rate_per_period", quote, "ld_rate").value == (Decimal("0.5"), "day")
+    cap = parse_field("percent", quote, "ld_cap")
+    assert (cap.value, cap.qualifier) == (10.0, "contract")
+
+
+@pytest.mark.parametrize("sentence", [
+    "Liquidated damages are excluded from this offer.",
+    "No liquidated damages apply under this order.",
+    "LDs are excluded from this contract.",
+    "Liquidated damages are excluded in their entirety.",
+    "No LDs apply for this project.",
+    "Liquidated damages are not applicable for the scope of supply.",
+    "We hereby exclude liquidated damages.",
+    "The Seller will not accept liquidated damages.",
+    "Under this Contract, the Supplier does not accept liquidated damages.",
+])
+def test_whole_contract_wording_and_the_bidder_as_subject_read_as_no_lds(sentence):
+    assert no_lds(sentence) is True
+    cap = parse_field("percent", sentence, "ld_cap")
+    assert (cap.value, cap.qualifier) == (0.0, "none")
+
+
+@pytest.mark.parametrize("sentence, scope, causes", [
+    ("Liquidated damages are excluded.", "whole", ()),
+    ("In case of force majeure no liquidated damages shall apply.", "cause", ("force majeure",)),
+    ("No liquidated damages shall apply to delays caused by force majeure.", "cause",
+     ("delays caused by force majeure",)),
+    ("For Buyer-caused delays no LDs apply.", "cause", ("Buyer-caused delays",)),
+    ("Where the delay is caused by the Buyer no LDs apply.", "cause", ("Where the delay is caused by the Buyer",)),
+    ("Liquidated damages are not applicable to delays caused by the Customer or force majeure.", "cause",
+     ("delays caused by the Customer or force majeure",)),
+    ("For Buyer-caused delay, liquidated damages are waived.", "cause", ("Buyer-caused delay",)),
+    ("During the first two weeks no LDs apply.", "other", ()),
+    ("Except for late commissioning no liquidated damages apply.", "other", ()),
+    ("Liquidated damages are waived during the first two weeks of delay.", "other", ()),
+    ("Liquidated damages are not applicable before the end of the grace period.", "other", ()),
+    ("Liquidated damages are not applicable to the order's spare parts.", "other", ()),
+    ("LDs are waived for force majeure and during the first week.", "other", ()),
+])
+def test_an_ld_exclusion_is_classified_by_its_scope(sentence, scope, causes):
+    (found,) = ld_exclusions(sentence)
+    assert (found.clause, found.scope, found.causes) == (sentence, scope, causes)
+
+
+def test_a_quote_without_an_ld_exclusion_has_none():
+    assert ld_exclusions("LDs are 0.5% per day, capped at 10% of the order value.") == []
 
 
 def test_no_lds_beside_a_stated_ld_percentage_is_not_read():

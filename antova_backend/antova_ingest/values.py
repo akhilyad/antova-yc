@@ -10,6 +10,7 @@ import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 import pint
 
@@ -605,22 +606,76 @@ NO_LD = re.compile(
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
     r"\bno\s+LDs?\b|\bLDs?\s+(?:(?:are|is|shall\s+be|will\s+be)\s+)?(?:excluded|waived|not\s+applicable)|"
     r"\bLDs?\s+(?:do(?:es)?|shall|will)\s+not\s+apply", re.IGNORECASE)
-# "No LDs" for the whole offer is read only from wording that says nothing more (Task 6 review r3): after the
-# exclusion, only the rest of its own words ("damages shall apply") and whole-contract wording ("under this
-# Contract", "in any case", "whatsoever") may follow, to the end of the clause. Anything else ("during the first
-# two weeks", "in force majeure situations", "to the order's spare parts") may scope the exclusion to some delays,
-# so it is not read as "no LDs" at all; nothing is listed as a scope, everything unlisted is one.
-_WHOLE_CONTRACT = (r"(?:(?:under|to|for|in|of|within)\s+(?:this|the|our)\s+(?:contract|order|purchase\s+order|offer|"
-                   r"agreement|quotation|proposal|tender|supply|bid)|in\s+any\s+(?:case|event)|whatsoever|at\s+all)")
-_NO_LD_TAIL = re.compile(
-    r"\s*(?:damages?\b)?(?:\s*\(\s*(?:the\s+)?LDs?\s*\))?"
-    r"(?:\s+(?:shall|will|do(?:es)?|are|is|can|may)(?:\s+not)?)?"
-    r"(?:\s+(?:be\s+)?(?:apply|applies|applied|applicable|payable|due|charged|levied|accepted|agreed|offered))?"
-    r"(?:\s*,?\s*" + _WHOLE_CONTRACT + r")*\s*[.!]?\s*", re.IGNORECASE)
-# Before the exclusion: the subject ("The Supplier does not accept…"), or whole-contract wording set off by a
-# comma ("Under this Contract, no LDs apply"). An introductory phrase set off by a comma ("For Buyer-caused
-# delay, …") may scope it.
-_NO_LD_HEAD = re.compile(r"\s*(?:" + _WHOLE_CONTRACT + r"\s*,)?[^,]*", re.IGNORECASE)
+# "No LDs" for the whole offer is read only from wording that says nothing more (Task 6 reviews r3, r4; ruling
+# R29). After the exclusion, only the rest of its own words ("damages shall apply") and whole-contract wording
+# ("under this Contract", "from this offer", "in any case", "whatsoever") may follow, to the end of the clause.
+# Before it, only nothing, whole-contract wording, or the bidder as subject ("The Supplier does not accept…",
+# "We hereby exclude…"). Anything else ("during the first two weeks", "in case of force majeure", "to the
+# order's spare parts") may scope the exclusion to some delays, so it is not read as "no LDs" at all; nothing
+# is listed as a scope, everything unlisted is one.
+_WHOLE_CONTRACT = (r"(?:(?:under|to|for|in|of|within|from)\s+(?:this|the|our)\s+(?:contract|order|purchase\s+order|"
+                   r"offer|agreement|quotation|proposal|tender|scope\s+of\s+supply|supply|bid|project)|"
+                   r"in\s+(?:their|its)\s+entirety|in\s+any\s+(?:case|event)|whatsoever|at\s+all)")
+# The rest of the exclusion's own words: "[No liquidated] damages (LDs) shall not be applicable".
+_NO_LD_WORDS = (r"\s*(?:damages?\b)?(?:\s*\(\s*(?:the\s+)?LDs?\s*\))?"
+                r"(?:\s+(?:shall|will|do(?:es)?|are|is|can|may)(?:\s+not)?)?"
+                r"(?:\s+(?:be\s+)?(?:apply|applies|applied|applicable|payable|due|charged|levied|accepted|agreed|offered))?")
+_NO_LD_TAIL = re.compile(_NO_LD_WORDS + r"(?:\s*,?\s*" + _WHOLE_CONTRACT + r")*\s*[.!]?\s*", re.IGNORECASE)
+# The bidder as the subject of the exclusion, with its verb's auxiliary: "The Supplier does", "We hereby".
+_LD_SUBJECT = (r"(?:(?:the\s+)?(?:Supplier|Seller|Vendor|Contractor|Bidder|Manufacturer)|we)"
+               r"(?:\s+(?:does|do|will|shall|hereby))*\s*")
+_NO_LD_HEAD = re.compile(r"\s*(?:" + _WHOLE_CONTRACT + r"\s*,?\s*)?(?:" + _LD_SUBJECT + r")?", re.IGNORECASE)
+# An exclusion scoped to delays the vendor does not cause (ruling R29): force majeure, or delays caused by or
+# attributable to the Buyer. The back-to-back delay scenario already assumes the delay is the vendor's, so such
+# an exclusion leaves the gap as computed; the formula says so. Any other scope is not classified ("other").
+_LD_PARTY = r"(?:the\s+)?(?:Buyer|Customer|Employer|Purchaser)"
+_LD_FM = r"force\s+majeure(?:\s+(?:events?|situations?|cases?|circumstances?|delays?))?"
+_LD_CAUSER = rf"(?:{_LD_PARTY}|{_LD_FM})(?:\s+(?:or|and|and/or)\s+(?:{_LD_PARTY}|{_LD_FM}))*"
+_LD_CAUSED = rf"(?:caused\s+by|attributable\s+to|due\s+to|arising\s+(?:from|out\s+of)|resulting\s+from)\s+{_LD_CAUSER}"
+_LD_CAUSE_PREP = r"(?:in\s+(?:the\s+)?(?:case|event)\s+of|in\s+respect\s+of|to|for|on|in|during|under)"
+_LD_CAUSE = (rf"(?:{_LD_CAUSE_PREP}\s+(?:(?:any\s+|a\s+|the\s+)?(?:delays?|events?|cases?)\s+{_LD_CAUSED}|"
+             rf"{_LD_CAUSED}|(?:any\s+)?(?:Buyer|Customer|Employer|Purchaser)[-\s]caused\s+delays?|"
+             rf"(?:any\s+|a\s+)?{_LD_FM})|"
+             rf"(?:where|if|when|in\s+case|insofar\s+as|to\s+the\s+extent(?:\s+that)?)\s+(?:the\s+|a\s+|any\s+)?"
+             rf"delays?\s+(?:is|are|was|were|has\s+been)\s+{_LD_CAUSED}|{_LD_CAUSED})")
+_LD_CAUSE_RE = re.compile(_LD_CAUSE, re.IGNORECASE)
+_LD_CAUSE_HEAD = re.compile(r"\s*(?:(?:" + _WHOLE_CONTRACT + "|" + _LD_CAUSE + r")\s*,?\s*)*(?:" + _LD_SUBJECT + r")?",
+                            re.IGNORECASE)
+_LD_CAUSE_TAIL = re.compile(_NO_LD_WORDS + r"(?:\s*,?\s*(?:" + _WHOLE_CONTRACT + "|" + _LD_CAUSE + r"))*\s*[.!]?\s*",
+                            re.IGNORECASE)
+_LEADING_PREP = re.compile(r"^" + _LD_CAUSE_PREP + r"\s+", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class LdExclusion:
+    """One clause that excludes or waives liquidated damages (NO_LD). `scope`: "whole" (the whole offer, as
+    `no_lds`), "cause" (only delays the vendor does not cause: force majeure or the Buyer's; `causes` holds that
+    wording as quoted) or "other" (any other scope, or one that cannot be classified)."""
+    clause: str
+    scope: Literal["whole", "cause", "other"]
+    causes: tuple[str, ...] = ()
+
+
+def ld_exclusion(clause: str) -> LdExclusion | None:
+    """How one clause (no ";" inside) excludes LDs, or None when it does not (ruling R29)."""
+    m = NO_LD.search(clause)
+    if not m:
+        return None
+    head, tail = clause[:m.start()], clause[m.end():]
+    if _NO_LD_HEAD.fullmatch(head) and _NO_LD_TAIL.fullmatch(tail):
+        return LdExclusion(clause.strip(), "whole")
+    if _LD_CAUSE_HEAD.fullmatch(head) and _LD_CAUSE_TAIL.fullmatch(tail):
+        causes = tuple(_LEADING_PREP.sub("", c.group(0).strip())
+                       for part in (head, tail) for c in _LD_CAUSE_RE.finditer(part))
+        if causes:
+            return LdExclusion(clause.strip(), "cause", causes)
+    return LdExclusion(clause.strip(), "other")
+
+
+def ld_exclusions(quote: str) -> list[LdExclusion]:
+    """Every clause of a quote that excludes or waives LDs, classified by `ld_exclusion`."""
+    found = (ld_exclusion(clause) for sentence in split_sentences(quote) for clause in sentence.split(";"))
+    return [e for e in found if e is not None]
 
 
 def no_lds(sentence: str) -> bool:
