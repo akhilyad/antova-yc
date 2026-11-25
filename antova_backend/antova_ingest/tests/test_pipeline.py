@@ -329,17 +329,19 @@ def _with_contract_documents(tmp_path: Path, owner_bytes: bytes | None = None) -
 CONTRACT_FILES = {"FA-vendor-a.pdf", "Owner-contract.pdf"}
 
 
-def test_contract_documents_are_not_sent_to_the_locator_or_swept(tmp_path, expected, result):
-    # Until the zero-retention gate exists, a contract document is parsed but never located.
+def test_contract_documents_get_only_the_contract_pass_and_are_not_swept(tmp_path, expected, result):
+    # A contract document is located for contract terms only (the guard is in test_contract_locate);
+    # it never gets the equipment pass or the equipment sweep, and the equipment cells do not move.
     locator = AnswerKeyLocator(expected)
     run = run_ingest(_with_contract_documents(tmp_path), locator=locator)
-    assert CONTRACT_FILES.isdisjoint(locator.calls)
+    assert CONTRACT_FILES.isdisjoint(locator.calls) and CONTRACT_FILES <= set(locator.contract_calls)
     located = json.loads(run.artifacts["located"].body)
     assert CONTRACT_FILES.isdisjoint(located["outcomes"]) and None not in located["failed_vendors"]
+    assert CONTRACT_FILES <= set(located["contract_outcomes"])
     verified = json.loads(run.artifacts["verified"].body)
     assert CONTRACT_FILES.isdisjoint(verified["sweep_hits"]) and CONTRACT_FILES.isdisjoint(verified["citations"])
     assert {k: c.status for k, c in _cells(run.tender).items()} == {k: c.status for k, c in _cells(result.tender).items()}
-    assert sum("not sent to the locator" in w for w in run.warnings) == 2
+    assert not any("not read" in w for w in run.warnings), run.warnings  # the pack is synthetic
     assert not any("None" in w for w in run.warnings), run.warnings
 
 

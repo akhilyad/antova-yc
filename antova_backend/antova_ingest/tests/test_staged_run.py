@@ -91,7 +91,7 @@ def test_rerun_rejects_an_unknown_stage(result):
 def test_fingerprint_covers_every_input(result):
     parts = result.fingerprint["parts"]
     assert set(parts) == {"inputs", "ontology", "contract_ontology", "rules", "rate_table", "prompt", "locator_mode",
-                          "package_version"}
+                          "locate_provider", "locate_model", "zero_retention_ref", "package_version"}
     assert set(parts["inputs"]) == {"manifest.json", "MR-33kV-GIS-Rev4.pdf", "Bid_vendor-a_Nordwerk.pdf",
                                     VOLTSWITCH, "Bid_vendor-c_Deltaport.pdf"}
     assert parts["locator_mode"] == "answer_key"

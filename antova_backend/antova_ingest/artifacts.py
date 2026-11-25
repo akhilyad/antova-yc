@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import antova_ingest
-from antova_ingest import contract_ontology, extract, ontology
+from antova_ingest import config, contract_ontology, extract, ontology
 
 STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled")
 # The modules that hold deterministic rules: a change to any of them changes the fingerprint.
@@ -113,11 +113,14 @@ def rules_hash() -> str:
     return sha256_of({name: _source_sha256(_PACKAGE_DIR / name) for name in RULE_MODULES})
 
 
-def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
+def run_fingerprint(tender_dir: Path, locator_mode: str, *, locate_provider: str = "",
+                    locate_model: str = "") -> dict:
     """The fingerprint of a run on this folder, with the parts it was built from.
 
     Reads only the manifest and file bytes; an unreadable or missing file hashes
-    as "" (the run itself reports it).
+    as "" (the run itself reports it). It names who located (provider and model) and the
+    zero-retention agreement in force (ANTOVA_ZERO_RETENTION_REF, "" when unset), so a contract
+    approval shows which provider read its contracts.
     """
     tender_dir = Path(tender_dir)
     manifest_path = tender_dir / "manifest.json"
@@ -140,6 +143,9 @@ def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
         "prompt": sha256_text(extract.build_system_prompt(equipment_class))
         if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
         "locator_mode": locator_mode,
+        "locate_provider": locate_provider,
+        "locate_model": locate_model,
+        "zero_retention_ref": config.zero_retention_reference() or "",
         "package_version": antova_ingest.__version__,
     }
     return {"fingerprint": sha256_of(parts), "parts": parts}

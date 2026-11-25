@@ -31,26 +31,33 @@ from antova_ingest.contract_ontology import CONTRACT_ROLES
 from antova_ingest.extract import ModelLocator, ExtractError, LocateOutcome, Locator, ResponseStore
 from antova_ingest.ontology import PARAMETERS
 from antova_ingest.parse import DocumentUnreadable, load_manifest, parse_document, verify_quote
-from antova_ingest.pipeline import SAMPLES_DIR, IngestFailed, run_ingest
+from antova_ingest.pipeline import SAMPLES_DIR, IngestFailed, contract_text_allowed, run_ingest
 
 DEFAULT_PACKS = ("TENDER-2026-402", "TENDER-2026-417")
 
 
 class _Remembering:
-    """Locates each document once, so scoring and the pipeline run share one (possibly paid) answer."""
+    """Locates each document once per pass, so scoring and the pipeline run share one (possibly paid)
+    answer. It says what the locator it wraps says about sending text, so the zero-retention guard
+    judges the real locator."""
 
     def __init__(self, locator: Locator):
         self.locator = locator
-        self.answers: dict[str, LocateOutcome | Exception] = {}
+        self.answers: dict[tuple[str, bool], LocateOutcome | Exception] = {}
+        self.sends_text = getattr(locator, "sends_text", True)
+        for name in ("model", "prices", "provider"):
+            if hasattr(locator, name):
+                setattr(self, name, getattr(locator, name))
 
-    def locate(self, doc):
-        file = doc.entry.file
-        if file not in self.answers:
+    def locate(self, doc, *, contract: bool = False):
+        key = (doc.entry.file, contract)
+        if key not in self.answers:
             try:
-                self.answers[file] = self.locator.locate(doc)
+                self.answers[key] = (self.locator.locate(doc, contract=True) if contract
+                                     else self.locator.locate(doc))
             except Exception as exc:  # remembered and raised again, for the pipeline to judge
-                self.answers[file] = exc
-        answer = self.answers[file]
+                self.answers[key] = exc
+        answer = self.answers[key]
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -122,11 +129,14 @@ def score_pack(tender_dir: Path, locator: Locator) -> dict:
     expected = json.loads((tender_dir / "expected.json").read_text(encoding="utf-8"))
     remembering = _Remembering(locator)
     documents, missing, held = [], [], []
-    for entry in load_manifest(tender_dir).documents:
+    manifest = load_manifest(tender_dir)
+    for entry in manifest.documents:
         if entry.role in CONTRACT_ROLES:
-            # TEMPORARY until the zero-retention gate (Task 4): contract text is never sent to the
-            # locator here either. Held back is not missing: the pipeline holds it back the same way.
-            held.append(entry.file)
+            # The answer key scores equipment passes only. A contract document goes to the locator (its
+            # contract pass, in the pipeline run below) only past the zero-retention guard; held back
+            # is not missing: the pipeline holds it back the same way.
+            if not contract_text_allowed(locator, manifest):
+                held.append(entry.file)
             continue
         try:
             doc = parse_document(tender_dir, entry)
@@ -180,7 +190,8 @@ def format_report(packs: list[dict]) -> str:
         for m in pack["missing"]:
             lines.append(f"- not scored: {m['file']}: {m['reason']}")
         for file in pack.get("held", []):
-            lines.append(f"- not located: {file}: contract document (no zero-retention gate yet)")
+            lines.append(f"- not located: {file}: contract document, and no zero-retention agreement "
+                         f"is set (ANTOVA_ZERO_RETENTION_REF)")
         if pack["documents"]:
             lines.append("| document | returned | verified | rejected | matched | expected | recall | extra |"
                          " headline | cover | silent | windows |")

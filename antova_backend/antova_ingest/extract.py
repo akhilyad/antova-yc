@@ -99,7 +99,15 @@ class LocateOutcome:
 
 
 class Locator(Protocol):
-    def locate(self, doc: ParsedDocument) -> LocateOutcome: ...
+    """Locates one document. `contract=True` is the contract-terms pass (build_contract_prompt).
+
+    `sends_text` says whether the document's text leaves the process (to a model provider). The
+    pipeline sends contract text only under the zero-retention guard; a locator that does not say
+    is treated as sending text.
+    """
+    sends_text: bool
+
+    def locate(self, doc: ParsedDocument, *, contract: bool = False) -> LocateOutcome: ...
 
 
 class ExtractError(Exception):
@@ -299,20 +307,35 @@ def prompt_fingerprint(equipment_class: str = DEFAULT_EQUIPMENT_CLASS) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
+def contract_prompt_fingerprint() -> str:
+    """Short hash of the contract prompt: the replay key of a contract pass."""
+    return hashlib.sha256(build_contract_prompt().encode("utf-8")).hexdigest()[:12]
+
+
 class ResponseStore:
     """Saved answers, one file per (document, prompt, model). `model` is the model that answers, so a
-    different model never replays another's answers; `salt` marks a prompt variant of that model."""
+    different model never replays another's answers; `salt` marks a prompt variant of that model, and
+    `contract_salt` the variant of its contract prompt.
+
+    A document's equipment pass and its contract pass are two prompts, so two keys; the equipment key
+    is the one it always was, so saved answers still replay.
+    """
 
     def __init__(self, directory: Path, model: str = MODEL, salt: str = "",
-                 equipment_class: str = DEFAULT_EQUIPMENT_CLASS):
+                 equipment_class: str = DEFAULT_EQUIPMENT_CLASS, contract_salt: str = ""):
         self.directory = Path(directory)
         self.model = model
         self.salt = salt
         self.equipment_class = equipment_class
+        self.contract_salt = contract_salt
 
-    def key_for(self, doc: ParsedDocument) -> str:
-        suffix = f"-{self.salt}" if self.salt else ""
-        return f"{doc.sha256}__{PROMPT_VERSION}-{prompt_fingerprint(self.equipment_class)}{suffix}__{self.model}"
+    def fingerprint_for(self, *, contract: bool = False) -> str:
+        return f"contract-{contract_prompt_fingerprint()}" if contract else prompt_fingerprint(self.equipment_class)
+
+    def key_for(self, doc: ParsedDocument, *, contract: bool = False) -> str:
+        salt = self.contract_salt if contract else self.salt
+        suffix = f"-{salt}" if salt else ""
+        return f"{doc.sha256}__{PROMPT_VERSION}-{self.fingerprint_for(contract=contract)}{suffix}__{self.model}"
 
     def _path(self, key: str) -> Path:
         return self.directory / f"{key}.json"
@@ -336,7 +359,7 @@ class ResponseStore:
             reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
             raise StoredResponseCorrupt(filename or path.name, path, f"{type(exc).__name__}: {reason}") from exc
 
-    def save(self, key: str, outcome: LocateOutcome, doc: ParsedDocument) -> Path:
+    def save(self, key: str, outcome: LocateOutcome, doc: ParsedDocument, *, contract: bool = False) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
         record = {
             "key": key,
@@ -345,7 +368,7 @@ class ResponseStore:
             "model": self.model,
             "served_model": outcome.model or self.model,
             "prompt_version": PROMPT_VERSION,
-            "prompt_fingerprint": prompt_fingerprint(self.equipment_class),
+            "prompt_fingerprint": contract_prompt_fingerprint() if contract else prompt_fingerprint(self.equipment_class),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "usage": {"input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens},
             "response": outcome.response.model_dump(mode="json"),
@@ -365,6 +388,9 @@ class ResponseStore:
 
 
 class ModelLocator:
+    sends_text = True  # the document's text goes to the provider
+    provider = "anthropic"
+
     def __init__(self, store: ResponseStore, mode: Mode, client_factory: Callable[[], Any] = anthropic.Anthropic):
         if mode not in ("replay", "auto", "live"):
             raise ValueError(f"unknown mode {mode!r}")
@@ -382,11 +408,12 @@ class ModelLocator:
         if not has_credentials():
             raise MissingCredentials(filename)
 
-    def _system(self) -> str:
-        return build_system_prompt(self.store.equipment_class)
+    def _system(self, contract: bool = False) -> str:
+        return build_contract_prompt() if contract else build_system_prompt(self.store.equipment_class)
 
-    def locate(self, doc: ParsedDocument) -> LocateOutcome:
-        key = self.store.key_for(doc)
+    def locate(self, doc: ParsedDocument, *, contract: bool = False) -> LocateOutcome:
+        """The equipment pass, or with `contract` the contract-terms pass; each saved under its own key."""
+        key = self.store.key_for(doc, contract=contract)
         if self.mode in ("replay", "auto"):
             stored = self.store.load(key, doc.entry.file)
             if stored is not None:
@@ -394,12 +421,12 @@ class ModelLocator:
             if self.mode == "replay":
                 raise ReplayMiss(doc.entry.file, key)
         self._ready(doc.entry.file)
-        outcome = self._call(self.client_factory(), doc)
-        self.store.save(key, outcome, doc)
+        outcome = self._call(self.client_factory(), doc, contract=contract)
+        self.store.save(key, outcome, doc, contract=contract)
         return outcome
 
-    def _call(self, client: Any, doc: ParsedDocument) -> LocateOutcome:
-        system = self._system()
+    def _call(self, client: Any, doc: ParsedDocument, contract: bool = False) -> LocateOutcome:
+        system = self._system(contract)
         total = self._count(client, system, build_document_content(doc))
         if total <= self.max_input_tokens:
             return self._send(client, doc, system, None)

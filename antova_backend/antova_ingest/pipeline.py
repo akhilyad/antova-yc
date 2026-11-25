@@ -22,7 +22,7 @@ import anthropic
 import antova_engine as engine
 from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
-from antova_ingest.contract_ontology import CONTRACT_ROLES
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID, CONTRACT_ROLES
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
 from antova_ingest.ontology import (
@@ -294,8 +294,49 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
     return {"manifest": dumped, "documents": documents, "warnings": warnings}
 
 
+# The zero-retention guard (spec 9.9). Contract text goes to a model provider only when the deployment
+# names its zero-retention agreement, or the tender is synthetic.
+_ZERO_RETENTION_REASON = ("Contract documents go only to a model provider with a zero-retention agreement; "
+                          "set ANTOVA_ZERO_RETENTION_REF.")
+
+
+def contract_text_allowed(locator: Locator, manifest: TenderManifest) -> bool:
+    """Whether this locator may be given contract text for this tender.
+
+    A locator that keeps the text in the process (sends_text False, the answer key) always may. One
+    that does not say is treated as sending it.
+    """
+    return (not getattr(locator, "sends_text", True) or manifest.synthetic
+            or config.zero_retention_reference() is not None)
+
+
+def contract_refused_warning(file: str) -> str:
+    """The warning for a contract document held back by the zero-retention guard."""
+    return f"{file}: not read. {_ZERO_RETENTION_REASON}"
+
+
+def contract_pass_refused_warning(file: str) -> str:
+    """The warning for a vendor bid whose contract-terms pass the guard held back (its equipment pass ran)."""
+    return f"{file}: contract terms not read. {_ZERO_RETENTION_REASON}"
+
+
+def needs_contract_pass(manifest: TenderManifest) -> bool:
+    """A tender goes to contract approval when it has a contract document or buyer-entered owner terms;
+    only then are its bids located a second time, for their contract terms."""
+    return (any(entry.role in CONTRACT_ROLES for entry in manifest.documents)
+            or bool(manifest.project and manifest.project.owner_terms))
+
+
+_CONTRACT_PARAM_IDS = [p.id for p in CONTRACT_PARAMETERS]
+
+
 def stage_located(bodies: dict, locator: Locator) -> dict:
     """Locate every readable document, up to locate_concurrency() at a time.
+
+    The MR and each bid get the equipment pass. A contract document gets only the contract-terms
+    pass, and a bid gets that pass too when the tender goes to contract approval; the zero-retention
+    guard holds both back. Contract answers are kept apart (`contract_outcomes`, each with the
+    parameter ids it answers), so contract and equipment evidence never mix.
 
     Results are taken in manifest order, so the artifact does not depend on which call finished
     first. A failure that fails the ingest cancels the calls not yet started; the ones already
@@ -303,55 +344,87 @@ def stage_located(bodies: dict, locator: Locator) -> dict:
     """
     manifest = _manifest(bodies)
     docs = _documents(bodies, manifest)
-    # TEMPORARY until the zero-retention gate (Task 4): a contract document is parsed but never sent
-    # to the locator, so nothing in it reaches a model provider.
-    held = [entry.file for entry in manifest.documents if entry.role in CONTRACT_ROLES and entry.file in docs]
-    jobs = [(entry, docs[entry.file]) for entry in manifest.documents
-            if entry.file in docs and entry.role not in CONTRACT_ROLES]
+    allowed = contract_text_allowed(locator, manifest)
+    second_pass = needs_contract_pass(manifest)
+    jobs: list[tuple] = []  # (entry, doc, contract)
+    warnings: list[str] = []
+    for entry in manifest.documents:
+        if entry.file not in docs:
+            continue
+        if entry.role in CONTRACT_ROLES:
+            if allowed:
+                jobs.append((entry, docs[entry.file], True))
+            else:
+                warnings.append(contract_refused_warning(entry.file))
+            continue
+        jobs.append((entry, docs[entry.file], False))
+        if entry.role == "vendor_bid" and second_pass:
+            if allowed:
+                jobs.append((entry, docs[entry.file], True))
+            else:
+                warnings.append(contract_pass_refused_warning(entry.file))
     outcomes: dict[str, dict] = {}
+    contract_outcomes: dict[str, dict] = {}
     failed: list[str] = []
-    warnings: list[str] = [f"{file}: contract document not sent to the locator (no zero-retention gate yet)"
-                           for file in held]
     with ThreadPoolExecutor(max_workers=max(1, min(locate_concurrency(), len(jobs)))) as pool:
-        futures = [pool.submit(locator.locate, doc) for _, doc in jobs]
+        # The equipment pass is called exactly as before, so a locator that knows only it still works.
+        futures = [pool.submit(locator.locate, doc, contract=True) if contract else pool.submit(locator.locate, doc)
+                   for _, doc, contract in jobs]
         try:
-            for (entry, _doc), future in zip(jobs, futures):
+            for (entry, _doc, contract), future in zip(jobs, futures):
+                label = f"{entry.file} (contract terms)" if contract else entry.file
                 try:
                     outcome = future.result()
                 except _DEGRADES_BID as exc:
                     if entry.role == "mr_spec":
                         raise _failed(exc) from exc
+                    if contract:  # the contract terms are missing; a bid's equipment evaluation stands
+                        warnings.append(f"{label}: {exc}")
+                        continue
                     if entry.vendor_id:
                         failed.append(entry.vendor_id)
                     warnings.append(f"{entry.vendor_id or entry.file}: {exc}")
                     continue
                 except (ExtractError, anthropic.APIError) as exc:
                     raise _failed(exc) from exc
-                asked = getattr(locator, "model", extract.MODEL)
-                if outcome.model and outcome.model != asked:
-                    warnings.append(f"{entry.file}: answered by fallback model {outcome.model}, not {asked}")
-                record = {
-                    "response": outcome.response.model_dump(mode="json"),
-                    "input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens,
-                    "from_store": outcome.from_store, "model": outcome.model,
-                }
-                prices = getattr(locator, "prices", None)
-                if prices is not None:  # a model priced differently from the model: its own rates, in the artifact
-                    record["prices"] = [str(prices[0]), str(prices[1])]
-                windows = getattr(outcome, "windows", None)
-                if windows:
-                    record["windows"] = [list(w) for w in windows]
-                    spans = ", ".join(f"p.{a}-{b}" for a, b in windows)
-                    warnings.append(f"{entry.file}: too long for one call; located in {len(windows)} "
-                                    f"overlapping page windows ({spans})")
-                outcomes[entry.file] = record
+                record = _located_record(locator, outcome, label, warnings)
+                if contract:
+                    record["param_ids"] = list(_CONTRACT_PARAM_IDS)
+                    contract_outcomes[entry.file] = record
+                else:
+                    outcomes[entry.file] = record
         except BaseException:
             for future in futures:
                 future.cancel()
             raise
+    every = [*outcomes.values(), *contract_outcomes.values()]
     ingest_mode = getattr(locator, "ingest_mode_label", None) or (
-        "replay" if outcomes and all(o["from_store"] for o in outcomes.values()) else "live")
-    return {"outcomes": outcomes, "failed_vendors": failed, "warnings": warnings, "ingest_mode": ingest_mode}
+        "replay" if every and all(o["from_store"] for o in every) else "live")
+    body = {"outcomes": outcomes, "failed_vendors": failed, "warnings": warnings, "ingest_mode": ingest_mode}
+    if contract_outcomes:  # left out when there are none, so a tender without contract terms stores what it did
+        body["contract_outcomes"] = contract_outcomes
+    return body
+
+
+def _located_record(locator: Locator, outcome: LocateOutcome, label: str, warnings: list[str]) -> dict:
+    asked = getattr(locator, "model", extract.MODEL)
+    if outcome.model and outcome.model != asked:
+        warnings.append(f"{label}: answered by fallback model {outcome.model}, not {asked}")
+    record = {
+        "response": outcome.response.model_dump(mode="json"),
+        "input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens,
+        "from_store": outcome.from_store, "model": outcome.model,
+    }
+    prices = getattr(locator, "prices", None)
+    if prices is not None:  # a model priced differently from the model: its own rates, in the artifact
+        record["prices"] = [str(prices[0]), str(prices[1])]
+    windows = getattr(outcome, "windows", None)
+    if windows:
+        record["windows"] = [list(w) for w in windows]
+        spans = ", ".join(f"p.{a}-{b}" for a, b in windows)
+        warnings.append(f"{label}: too long for one call; located in {len(windows)} "
+                        f"overlapping page windows ({spans})")
+    return record
 
 
 def _responses(bodies: dict) -> dict[str, extract.LocateResponse]:
@@ -364,7 +437,10 @@ def stage_verified(bodies: dict) -> dict:
     by_id = params_by_id_for(manifest.equipment_class)
     docs = _documents(bodies, manifest)
     responses = _responses(bodies)
-    for file, response in responses.items():
+    contract_responses = {file: extract.LocateResponse.model_validate(o["response"])
+                          for file, o in bodies["located"].get("contract_outcomes", {}).items()}
+    # A bid's pages are labeled by its equipment pass; the contract pass labels a contract document's.
+    for file, response in [*responses.items(), *contract_responses.items()]:
         labels = {ps.page: ps.section for ps in response.page_sections}
         for page in docs[file].pages:
             if page.section == "unlabeled":
@@ -423,9 +499,7 @@ def stage_verified(bodies: dict) -> dict:
     roles = {d.file: d.role for d in manifest.documents}
     sweep_hits: dict[str, list[dict]] = {}
     located = refound = new = 0
-    for file in responses:
-        if roles[file] in CONTRACT_ROLES:
-            continue  # TEMPORARY (Task 4): a contract document is neither located nor swept
+    for file in responses:  # equipment passes only: a contract document has none, so it is not swept
         hits = sweep.sweep_document(docs[file], manifest.equipment_class)
         sweep_hits[file] = [{"param_id": h.param_id, "page": h.citation.page, "quote": h.citation.quote} for h in hits]
         cited = [(row["param_id"], Citation.from_dict(row["citation"])) for row in citations[file]]
@@ -438,12 +512,43 @@ def stage_verified(bodies: dict) -> dict:
                 citations[file].append({"param_id": hit.param_id, "citation": hit.citation.to_dict(), "source": "sweep"})
                 cited.append((hit.param_id, hit.citation))
                 new += 1
-    return {
+    body = {
         "sections": {file: [p.section for p in doc.pages] for file, doc in docs.items()},
         "citations": citations, "accepted": accepted, "rejected": rejected,
         "bay_count": bay_count, "headline": headline, "cover": cover, "warnings": [],
         "sweep_hits": sweep_hits, "locales": locales, "commissioning_lag": commissioning_lag,
         "sweep": {"hits": sum(len(h) for h in sweep_hits.values()), "new": new, "located": located, "refound": refound},
+        "not_stated": {file: {ns.param_id: ns.pages_searched for ns in response.not_stated}
+                       for file, response in responses.items()},
+    }
+    if contract_responses:  # left out when there are none, so a tender without contract terms stores what it did
+        body["contract"] = _verified_contract(bodies["located"]["contract_outcomes"], contract_responses, docs)
+    return body
+
+
+def _verified_contract(records: dict, responses: dict[str, extract.LocateResponse],
+                       docs: dict[str, ParsedDocument]) -> dict:
+    """The contract passes' candidates whose quote is on its page, kept apart from equipment citations.
+
+    A candidate counts only for a parameter its pass was asked about (the record's param_ids), so an
+    equipment id in a contract answer is rejected, as a contract id in an equipment answer is.
+    """
+    citations: dict[str, list[dict]] = {}
+    accepted = rejected = 0
+    for file, response in responses.items():
+        asked = set(records[file]["param_ids"]) & set(CONTRACT_PARAMS_BY_ID)
+        rows = []
+        for candidate in response.candidates:
+            citation = (verify_quote(docs[file], candidate.page, candidate.quote)
+                        if candidate.param_id in asked else None)
+            if citation is None:
+                rejected += 1
+                continue
+            accepted += 1
+            rows.append({"param_id": candidate.param_id, "citation": citation.to_dict(), "source": "locator"})
+        citations[file] = rows
+    return {
+        "citations": citations, "accepted": accepted, "rejected": rejected,
         "not_stated": {file: {ns.param_id: ns.pages_searched for ns in response.not_stated}
                        for file, response in responses.items()},
     }
@@ -696,11 +801,12 @@ def stage_leveled(bodies: dict) -> dict:
     table = bodies["priced"]["rate_table"]
     warnings = [w for stage in STAGE_NAMES[:-1] for w in bodies[stage]["warnings"]]
 
-    input_tokens = sum(o["input_tokens"] for o in located["outcomes"].values())
-    output_tokens = sum(o["output_tokens"] for o in located["outcomes"].values())
+    every_call = [*located["outcomes"].values(), *located.get("contract_outcomes", {}).values()]
+    input_tokens = sum(o["input_tokens"] for o in every_call)
+    output_tokens = sum(o["output_tokens"] for o in every_call)
     cost = sum((
         extract.api_cost_usd(o["input_tokens"], o["output_tokens"], *(Decimal(p) for p in o.get("prices", ())))
-        for o in located["outcomes"].values()), Decimal("0"))
+        for o in every_call), Decimal("0"))
     page_counts = {d["file"]: len(d["pages"]) for d in parsed["documents"]}
     vendors = [
         engine.Vendor(
@@ -905,7 +1011,9 @@ def run_ingest(tender_dir: Path, mode: str = "auto", progress: Callable[[str, in
     if locator is None:
         locator = extract.make_locator(tender_dir, mode)
     locator_mode = getattr(locator, "ingest_mode_label", None) or getattr(locator, "mode", None) or mode
-    fingerprint = artifacts.run_fingerprint(tender_dir, str(locator_mode))
+    fingerprint = artifacts.run_fingerprint(tender_dir, str(locator_mode),
+                                            locate_provider=str(getattr(locator, "provider", "") or ""),
+                                            locate_model=str(getattr(locator, "model", "") or ""))
     report(*STAGES[0])
 
     arts: dict[str, StageArtifact] = {}

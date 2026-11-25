@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS
 from antova_ingest.extract import LocateOutcome, LocateResponse
 from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, parameters_for
 from antova_ingest.types import ParsedDocument
@@ -22,24 +23,40 @@ def load_expected() -> dict:
 
 
 class AnswerKeyLocator:
-    """Returns the generator's ideal locate response for each document."""
+    """Returns the generator's ideal locate response for each document.
+
+    The contract pass answers from expected["ideal_contract_locate"] (file -> response) when the key
+    has one, else with no candidates. No text leaves the process, so contract documents are never
+    held back from it (sends_text is False).
+    """
 
     ingest_mode_label = "answer_key"
+    sends_text = False
+    provider = "answer_key"
 
     def __init__(self, expected: dict, overrides: dict[str, dict] | None = None):
         self.expected = expected
         self.overrides = overrides or {}
-        self.calls: list[str] = []
+        self.calls: list[str] = []           # equipment passes
+        self.contract_calls: list[str] = []  # contract passes
 
-    def locate(self, doc: ParsedDocument) -> LocateOutcome:
+    def locate(self, doc: ParsedDocument, *, contract: bool = False) -> LocateOutcome:
         filename = doc.entry.file
-        self.calls.append(filename)
-        data = dict(self.expected["ideal_locate"][filename]) | self.overrides.get(filename, {})
+        if contract:
+            self.contract_calls.append(filename)
+            data = dict(self.expected.get("ideal_contract_locate", {}).get(filename, _EMPTY))
+            parameters = CONTRACT_PARAMETERS
+        else:
+            self.calls.append(filename)
+            data = dict(self.expected["ideal_locate"][filename]) | self.overrides.get(filename, {})
+            parameters = parameters_for(self.expected.get("equipment_class", DEFAULT_EQUIPMENT_CLASS))
         if "not_stated" not in data:
             # The locator contract: each parameter has candidates or an explicit NOT_STATED
             # with the pages searched (an ideal locator has read every page).
             located = {c["param_id"] for c in data["candidates"]}
             data["not_stated"] = [{"param_id": p.id, "pages_searched": [page.number for page in doc.pages]}
-                                  for p in parameters_for(self.expected.get("equipment_class", DEFAULT_EQUIPMENT_CLASS))
-                                  if p.id not in located]
+                                  for p in parameters if p.id not in located]
         return LocateOutcome(LocateResponse.model_validate(data), 0, 0, False)
+
+
+_EMPTY = {"page_sections": [], "candidates": [], "tender_facts": [], "headline_price": None, "cover_claim": None}
