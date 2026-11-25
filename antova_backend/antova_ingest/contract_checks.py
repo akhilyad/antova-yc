@@ -88,23 +88,35 @@ def _amount_text(value: Decimal) -> str:
     return f"{value:,.0f}" if value == value.to_integral_value() else f"{_euros(value):,.2f}"
 
 
+def buyer_rate(from_currency: str, to_currency: str,
+               fx: Sequence[BaselineFx]) -> tuple[BaselineFx, Literal["×", "÷"]] | None:
+    """The buyer-entered rate for the pair, matched in either direction (the baseline holds one per pair), and
+    the operation that takes an amount from `from_currency` to `to_currency` with it; None when none is entered."""
+    for rate in fx:
+        if (rate.from_currency, rate.to_currency) == (from_currency, to_currency):
+            return rate, "×"
+        if (rate.from_currency, rate.to_currency) == (to_currency, from_currency):
+            return rate, "÷"
+    return None
+
+
+def no_rate_reason(from_currency: str, to_currency: str) -> str:
+    return f"no {from_currency}→{to_currency} rate entered"
+
+
 def fx_convert(amount: Decimal, from_currency: str, to_currency: str, fx: Sequence[BaselineFx]) -> Converted:
     """`amount` in `to_currency`, with the buyer-entered rate for the pair (in either direction). Antova never
     fetches or assumes a rate: without one, the amount is None with the reason."""
     if from_currency == to_currency:
         return Converted(amount, "")
-    for rate in fx:
-        dated = rate.dated.isoformat()
-        pair = f"{rate.from_currency}→{rate.to_currency}"
-        if (rate.from_currency, rate.to_currency) == (from_currency, to_currency):
-            value, op = amount * rate.rate, "×"
-        elif (rate.from_currency, rate.to_currency) == (to_currency, from_currency):
-            value, op = amount / rate.rate, "÷"
-        else:
-            continue
-        return Converted(value, f"{from_currency} {_amount_text(amount)} {op} {_dec_text(rate.rate)} ({dated}, {pair}) "
-                                f"= {_cents(to_currency, value)}")
-    return Converted(None, "", f"no {from_currency}→{to_currency} rate entered")
+    found = buyer_rate(from_currency, to_currency, fx)
+    if found is None:
+        return Converted(None, "", no_rate_reason(from_currency, to_currency))
+    rate, op = found
+    value = amount * rate.rate if op == "×" else amount / rate.rate
+    pair = f"{rate.from_currency}→{rate.to_currency}"
+    return Converted(value, f"{from_currency} {_amount_text(amount)} {op} {_dec_text(rate.rate)} "
+                            f"({rate.dated.isoformat()}, {pair}) = {_cents(to_currency, value)}")
 
 
 # --- the checks -------------------------------------------------------------------------------------
