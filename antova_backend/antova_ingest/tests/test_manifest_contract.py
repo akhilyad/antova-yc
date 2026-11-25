@@ -192,3 +192,10 @@ def test_an_amendment_chain_loads():
     second = {**FA_AMENDMENT, "file": "fa-a-amd2.pdf", "amends": "fa-a-amd1.pdf", "dated": "2026-08-01"}
     manifest = _manifest([MR, FA, FA_AMENDMENT, second])
     assert [d.amends for d in manifest.documents] == [None, None, "fa-a.pdf", "fa-a-amd1.pdf"]
+
+
+def test_the_contract_roles_match_the_contract_ontology():
+    from antova_ingest import types
+    from antova_ingest.contract_ontology import CONTRACT_ROLES
+    assert set(types._CONTRACT_ROLES) == CONTRACT_ROLES
+    assert CONTRACT_ROLES <= set(types.DocumentRole.__args__)

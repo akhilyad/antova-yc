@@ -132,3 +132,33 @@ def test_an_api_error_is_reported_per_document_not_raised(tmp_path, capsys):
     pack = locator_eval.score_pack(folder, Failing())
     assert len(pack["missing"]) == 4 and "APIConnectionError" in pack["missing"][0]["reason"]
     assert pack["locator"] == "test-model" and pack["pipeline"]["ran"] is False
+
+
+def test_contract_documents_are_held_back_not_located_or_missing(tmp_path, ideal):
+    # Until the zero-retention gate exists, the scorecard must not send contract text to a provider.
+    folder = _pack(tmp_path)
+    shutil.copy(folder / VOLTSWITCH, folder / "FA-vendor-b.pdf")
+    shutil.copy(folder / "MR-33kV-GIS-Rev4.pdf", folder / "Owner-contract.pdf")
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest["documents"] += [
+        {"file": "FA-vendor-b.pdf", "role": "framework_agreement", "counterparty_id": "vendor-b", "dated": "2025-03-01"},
+        {"file": "Owner-contract.pdf", "role": "owner_contract"},
+    ]
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _store(folder, ideal)
+    stored = locator_eval.stored_locator(folder, live=False)
+    sent = []
+
+    class Recording:
+        model = stored.model
+
+        def locate(self, doc):
+            sent.append(doc.entry.file)
+            return stored.locate(doc)
+
+    pack = locator_eval.score_pack(folder, Recording())
+    assert {"FA-vendor-b.pdf", "Owner-contract.pdf"}.isdisjoint(sent)
+    assert pack["missing"] == [] and len(pack["documents"]) == 4
+    assert pack["held"] == ["FA-vendor-b.pdf", "Owner-contract.pdf"]
+    assert pack["pipeline"]["ran"] and pack["pipeline"]["mismatches"] == []
+    assert "not located: FA-vendor-b.pdf" in locator_eval.format_report([pack])

@@ -188,7 +188,7 @@ def test_every_baseline_field_is_written_by_its_type_and_none_is_blank():
     assert "Contract value: 48000000.00 EUR" in terms
     assert "LD rate: 0.5 (percent_per_week)" in terms and "LD cap: 10 (percent)" in terms
     assert "Liability cap: 48000000.00 EUR (100% of contract value)" in terms
-    assert "Warranty: 24 months from pac" in terms and "Law: England and Wales" in terms
+    assert "Warranty: 24 months" in terms and "Warranty start: pac" in terms and "Law: England and Wales" in terms
     assert "Package LD share: 12.5%" in terms
 
 
@@ -197,3 +197,11 @@ def test_an_owner_term_not_entered_says_so():
     project = ProjectBaseline.model_validate({"owner_terms": {"law": "Spain"}}).model_dump(mode="json", exclude_none=True)
     terms = _sheet_rows(_project_workbook(project), "Project")[1][1].split("\n")
     assert "Law: Spain" in terms and "LD rate: not entered" in terms and "Contract value: not entered" in terms
+
+
+def test_a_warranty_start_entered_without_months_is_still_shown():
+    from antova_ingest.types import ProjectBaseline
+    project = ProjectBaseline.model_validate({"owner_terms": {"warranty_start": "cod"}}).model_dump(
+        mode="json", exclude_none=True)
+    terms = _sheet_rows(_project_workbook(project), "Project")[1][1].split("\n")
+    assert "Warranty: not entered" in terms and "Warranty start: cod" in terms

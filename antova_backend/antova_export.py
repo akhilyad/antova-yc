@@ -89,7 +89,7 @@ def _money(value: Mapping[str, Any]) -> str:
 _OWNER_TERMS = (
     ("contract_value", "Contract value"), ("ld_rate", "LD rate"), ("ld_cap", "LD cap"),
     ("package_ld_share_pct", "Package LD share"), ("liability_cap", "Liability cap"),
-    ("warranty_months", "Warranty"), ("law", "Law"),
+    ("warranty_months", "Warranty"), ("warranty_start", "Warranty start"), ("law", "Law"),
 )
 
 
@@ -104,7 +104,7 @@ def _owner_term(terms: Mapping[str, Any], name: str) -> str:
     if name == "package_ld_share_pct":
         return f"{value}%"
     if name == "warranty_months":
-        return f"{value} months from {terms.get('warranty_start') or 'an unstated start'}"
+        return f"{value} months"  # its start is its own line, shown whether or not the months are
     return str(value)
 
 

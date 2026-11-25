@@ -27,6 +27,7 @@ from pathlib import Path
 import anthropic
 
 from antova_ingest import extract, verify
+from antova_ingest.contract_ontology import CONTRACT_ROLES
 from antova_ingest.extract import ModelLocator, ExtractError, LocateOutcome, Locator, ResponseStore
 from antova_ingest.ontology import PARAMETERS
 from antova_ingest.parse import DocumentUnreadable, load_manifest, parse_document, verify_quote
@@ -120,8 +121,13 @@ def score_pack(tender_dir: Path, locator: Locator) -> dict:
     tender_dir = Path(tender_dir)
     expected = json.loads((tender_dir / "expected.json").read_text(encoding="utf-8"))
     remembering = _Remembering(locator)
-    documents, missing = [], []
+    documents, missing, held = [], [], []
     for entry in load_manifest(tender_dir).documents:
+        if entry.role in CONTRACT_ROLES:
+            # TEMPORARY until the zero-retention gate (Task 4): contract text is never sent to the
+            # locator here either. Held back is not missing: the pipeline holds it back the same way.
+            held.append(entry.file)
+            continue
         try:
             doc = parse_document(tender_dir, entry)
         except DocumentUnreadable:
@@ -152,6 +158,7 @@ def score_pack(tender_dir: Path, locator: Locator) -> dict:
             per_param[pid][0] += hit
             per_param[pid][1] += want
     return {"tender": tender_dir.name, "locator": getattr(locator, "model", "?"), "documents": documents, "missing": missing,
+            "held": held,
             "per_param": {pid: {"matched": h, "expected": w} for pid, (h, w) in sorted(per_param.items())},
             "cost_usd": str(sum((Decimal(d["cost_usd"]) for d in documents), Decimal("0"))),
             "pipeline": run}
@@ -172,6 +179,8 @@ def format_report(packs: list[dict]) -> str:
         lines.append(f"## {pack['tender']}  (locator model: {pack['locator']})")
         for m in pack["missing"]:
             lines.append(f"- not scored: {m['file']}: {m['reason']}")
+        for file in pack.get("held", []):
+            lines.append(f"- not located: {file}: contract document (no zero-retention gate yet)")
         if pack["documents"]:
             lines.append("| document | returned | verified | rejected | matched | expected | recall | extra |"
                          " headline | cover | silent | windows |")
