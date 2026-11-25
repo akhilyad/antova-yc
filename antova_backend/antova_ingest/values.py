@@ -603,22 +603,35 @@ _LIABILITY_CONTEXT = re.compile(r"liabilit", re.IGNORECASE)
 NO_LD = re.compile(
     r"\b(?:no|without|excludes?|excluded|waive[sd]?|not\s+(?:accept\w*|applicable|agree\w*))\b[^.;]{0,40}liquidated|"
     r"liquidated[^.;]{0,60}\b(?:excluded|waived|not\s+(?:accepted|applicable|agreed)|do(?:es)?\s+not\s+apply)|"
-    r"\bno\s+LDs?\b|\bLDs?\s+(?:excluded|waived|not\s+applicable)", re.IGNORECASE)
-# An exclusion scoped to some delays or causes ("not applicable to delays caused by the Buyer", "no LDs in
-# case of force majeure") is not "no LDs": the offer may still state a rate and a cap for every other delay.
-# "to this offer" (or order, contract) is the whole offer, so it is still an exclusion of all LDs.
-_LD_SCOPE = re.compile(
-    r"\b(?:to|for|in\s+(?:case|the\s+event|respect)\s+of|caused\s+by|due\s+to|arising|resulting|attributable|"
-    r"where|if|when|unless|except|save)\b"
-    r"(?!\s+(?:this|the|our|its)\s+(?:offer|order|purchase\s+order|contract|agreement|quotation|proposal|tender)\b)",
-    re.IGNORECASE)
+    r"\bno\s+LDs?\b|\bLDs?\s+(?:(?:are|is|shall\s+be|will\s+be)\s+)?(?:excluded|waived|not\s+applicable)|"
+    r"\bLDs?\s+(?:do(?:es)?|shall|will)\s+not\s+apply", re.IGNORECASE)
+# "No LDs" for the whole offer is read only from wording that says nothing more (Task 6 review r3): after the
+# exclusion, only the rest of its own words ("damages shall apply") and whole-contract wording ("under this
+# Contract", "in any case", "whatsoever") may follow, to the end of the clause. Anything else ("during the first
+# two weeks", "in force majeure situations", "to the order's spare parts") may scope the exclusion to some delays,
+# so it is not read as "no LDs" at all; nothing is listed as a scope, everything unlisted is one.
+_WHOLE_CONTRACT = (r"(?:(?:under|to|for|in|of|within)\s+(?:this|the|our)\s+(?:contract|order|purchase\s+order|offer|"
+                   r"agreement|quotation|proposal|tender|supply|bid)|in\s+any\s+(?:case|event)|whatsoever|at\s+all)")
+_NO_LD_TAIL = re.compile(
+    r"\s*(?:damages?\b)?(?:\s*\(\s*(?:the\s+)?LDs?\s*\))?"
+    r"(?:\s+(?:shall|will|do(?:es)?|are|is|can|may)(?:\s+not)?)?"
+    r"(?:\s+(?:be\s+)?(?:apply|applies|applied|applicable|payable|due|charged|levied|accepted|agreed|offered))?"
+    r"(?:\s*,?\s*" + _WHOLE_CONTRACT + r")*\s*[.!]?\s*", re.IGNORECASE)
+# Before the exclusion: the subject ("The Supplier does not accept…"), or whole-contract wording set off by a
+# comma ("Under this Contract, no LDs apply"). An introductory phrase set off by a comma ("For Buyer-caused
+# delay, …") may scope it.
+_NO_LD_HEAD = re.compile(r"\s*(?:" + _WHOLE_CONTRACT + r"\s*,)?[^,]*", re.IGNORECASE)
 
 
 def no_lds(sentence: str) -> bool:
-    """Whether the sentence excludes liquidated damages from the whole offer (NO_LD, with no scope to particular
-    delays or causes before or after the wording)."""
+    """Whether the sentence excludes liquidated damages from the whole offer: NO_LD, and nothing in its clause
+    that could limit the exclusion to some delays or causes."""
     m = NO_LD.search(sentence)
-    return bool(m) and not (_LD_SCOPE.search(sentence[:m.start()]) or _LD_SCOPE.search(sentence[m.end():]))
+    if not m:
+        return False
+    head = sentence[:m.start()].rsplit(";", 1)[-1]
+    tail = sentence[m.end():].split(";", 1)[0]
+    return bool(_NO_LD_HEAD.fullmatch(head) and _NO_LD_TAIL.fullmatch(tail))
 
 
 _PER_WEEK_FACTOR = {"week": 1.0, "day": 7.0, "month": 12 / 52}
@@ -690,8 +703,10 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
     """One percentage, chosen by the field: `ld_rate` (per week; per day or month is converted),
     `ld_cap` (a maximum on liquidated damages), `liability_cap` (a limit on total liability), a bond's
     value (`warranty_bond_pct`, `performance_bond_pct`, `advance_bond_pct`) or `termination_fee_pct`.
-    "No liquidated damages" (for the whole offer, `no_lds`) reads as 0 for both LD fields. A percentage written with a decimal comma
-    ("7,5 %", which matches as "5 %") is not read: None, never a value a tenth or ten times off."""
+    "No liquidated damages" for the whole offer (`no_lds`) reads as 0 for both LD fields, unless the quote also
+    states an LD percentage: then the two disagree and nothing is read (None, never 0). A percentage written
+    with a decimal comma ("7,5 %", which matches as "5 %") is not read: None, never a value a tenth or ten
+    times off."""
     if not require_context:
         m = _PERCENT.search(quote)
         return _percent_value(m) if m and not _after_decimal_comma(quote, m) else None
@@ -699,6 +714,8 @@ def _parse_percent(quote: str, field_name: str, require_context: bool = True) ->
         return _termination_fee(quote)
     sentences = split_sentences(quote)
     if field_name in ("ld_rate", "ld_cap") and any(no_lds(s) for s in sentences):
+        if any(_PERCENT.search(s) and _LD_CONTEXT.search(s) for s in sentences if not no_lds(s)):
+            return None  # "no LDs" beside a stated LD percentage: which governs is for a person to decide
         return FieldValue("percent", 0.0, "0 %", qualifier="none")
     for sentence in sentences:
         for clause in _clauses(sentence):
@@ -1160,9 +1177,10 @@ def _ld_triggers(quote: str) -> FieldValue | None:
         return None
     found = set()
     # Clause by clause: a clause that negates or excludes ("LDs are not applicable to late delivery", "delays
-    # to PAC caused by the Buyer are excluded") names no trigger.
+    # to PAC caused by the Buyer are excluded"), or waives LDs however scoped ("LDs are waived for late
+    # commissioning"), names no trigger.
     for clause in re.split(r"[;.]\s+|[;.]$", text):
-        if _NEGATION.search(clause) or _EXCLUSION.search(clause):
+        if _NEGATION.search(clause) or _EXCLUSION.search(clause) or NO_LD.search(clause):
             continue
         found |= {event.lastgroup for chain in _LD_TRIGGER_CHAIN.finditer(clause)
                   for event in EVENT.finditer(chain.group(0))}

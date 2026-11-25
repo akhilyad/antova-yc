@@ -227,6 +227,11 @@ def test_gap_is_taken_from_the_rounded_figures_so_the_formula_adds_up():
     assert liability.amount == D("50.01") and "= EUR 50.01" in liability.formula
 
 
+def test_a_zero_gap_is_shown_to_the_cent():
+    assert str(liability_back_to_back(100, 10, 2000000, currency="EUR").amount) == "0.00"
+    assert str(_b2b(D("14")).amount) == "0.00"
+
+
 def test_vendor_with_no_lds_pays_back_nothing():
     e = back_to_back_ld_gap(D("10000"), D("1000000"), D("50"), None, None, None, D("28"), currency="EUR",
                             vendor_provides_no_lds=True)

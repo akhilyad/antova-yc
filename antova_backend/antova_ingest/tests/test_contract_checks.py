@@ -352,6 +352,12 @@ def test_scoped_ld_exclusion_is_not_no_lds():
     assert "no liquidated damages" not in gap.formula
 
 
+def test_a_waiver_for_some_weeks_is_not_a_full_gap():
+    offer = _read("CT-01", 'Liquidated damages are waived during the first two weeks of delay. LDs are 0.5% per day, capped at 10% of the order value.', "bid.pdf")
+    gap = back_to_back_ld(_term("CT-01", _source("bid.pdf", offer)), OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount == D("80000.00")  # not 280,000 "the offer provides no liquidated damages"
+
+
 def test_ld_rate_in_conflict_never_takes_the_no_lds_path():
     offer = _source("bid.pdf", {"ld_cap": FieldValue("percent", 0.0, "0 %", qualifier="none")})
     disagree = {"code": "passages_disagree", "field": "ld_rate", "source": "offered",

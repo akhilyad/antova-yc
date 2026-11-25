@@ -165,7 +165,7 @@ def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share
         times = f"{_n(days)} days" if period == "day" else f"{_n(days)}/7 weeks"
         paid_back = (f"paid back by the vendor: min({_n(rate)}% per {period} × {times}, {_n(cap)}% cap) × "
                      f"{_money(currency, po)} = {_money(currency, pays)}")
-    gap = max(owed - pays, Decimal("0"))
+    gap = max(owed - pays, Decimal("0.00"))
     formula = "; ".join([*_steps(conversions, delay_weeks, days),
         f"owed to the owner: min({_money(currency, owner_rate)} per day × {_n(days)} days, "
         f"{_money(currency, owner_cap)} cap) × {_n(share)}% share = {_money(currency, owed)}",
@@ -186,7 +186,7 @@ def liability_back_to_back(owner_required_money, vendor_cap_pct, po_value, *, cu
     if missing:
         return _unknown(kind, "not known: " + ", ".join(missing))
     owner, carried = _euros(owner), _euros(po * cap / HUNDRED)
-    gap = max(owner - carried, Decimal("0"))
+    gap = max(owner - carried, Decimal("0.00"))
     formula = "; ".join([*conversions,
         f"gap max(owner cap {_money(currency, owner)} − vendor {_n(cap)}% × {_money(currency, po)} "
         f"({_money(currency, carried)}), 0) = {_money(currency, gap)}"])

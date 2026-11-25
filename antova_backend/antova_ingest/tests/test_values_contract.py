@@ -398,3 +398,62 @@ def test_ld_exclusion_scoped_to_force_majeure_keeps_rate_and_cap():
 ])
 def test_no_lds_is_an_exclusion_of_the_whole_offer(sentence, whole_offer):
     assert no_lds(sentence) is whole_offer
+
+
+
+# --- "no LDs" only from wording that says nothing more (Task 6 review r3) -----------------------------------
+
+@pytest.mark.parametrize("sentence", [
+    "Liquidated damages are waived during the first two weeks of delay.",
+    "No LDs in force majeure situations.",
+    "No liquidated damages on Buyer-caused delays.",
+    "Liquidated damages are not applicable before the end of the grace period.",
+    "Liquidated damages are not applicable to the order's spare parts.",
+    "No liquidated damages apply to the contract options.",
+    "LDs are waived for delayed commissioning.",
+])
+def test_an_exclusion_with_anything_more_is_not_no_lds(sentence):
+    assert no_lds(sentence) is False
+    for name in ("ld_rate", "ld_cap"):
+        assert parse_field("percent", sentence, name) is None  # unknown, never 0 % "none"
+
+
+@pytest.mark.parametrize("sentence", [
+    "No liquidated damages shall apply.",
+    "Liquidated damages do not apply.",
+    "The Supplier does not accept liquidated damages.",
+    "Under this Contract, no LDs apply.",
+    "No liquidated damages apply in any case.",
+    "LDs are waived.",
+    "LDs do not apply.",
+])
+def test_whole_offer_wordings_still_read_as_no_lds(sentence):
+    assert no_lds(sentence) is True
+    cap = parse_field("percent", sentence, "ld_cap")
+    assert (cap.value, cap.qualifier) == (0.0, "none")
+
+
+WAIVED_2W = 'Liquidated damages are waived during the first two weeks of delay. LDs are 0.5% per day, capped at 10% of the order value.'
+
+
+def test_a_waiver_for_some_weeks_keeps_the_stated_rate_and_cap():
+    assert parse_field("rate_per_period", WAIVED_2W, "ld_rate").value == (Decimal("0.5"), "day")
+    cap = parse_field("percent", WAIVED_2W, "ld_cap")
+    assert (cap.value, cap.qualifier) == (10.0, "contract")
+
+
+def test_no_lds_beside_a_stated_ld_percentage_is_not_read():
+    quote = "Liquidated damages are excluded. LDs are 0.5% per day, capped at 10% of the order value."
+    assert parse_field("percent", quote, "ld_cap") is None
+    assert parse_field("percent", quote, "ld_rate") is None
+
+
+@pytest.mark.parametrize("quote, expected", [
+    ("Liquidated damages are waived for late delivery.", None),
+    ("Liquidated damages are waived in case of late delivery.", None),
+    ("LDs are waived for delayed commissioning.", None),
+    ("LDs apply to late delivery; liquidated damages are waived for late commissioning.", ("delivery",)),
+])
+def test_a_waived_clause_names_no_ld_trigger(quote, expected):
+    value = parse_field("scope", quote, "ld_triggers")
+    assert (value.value if value else None) == expected
