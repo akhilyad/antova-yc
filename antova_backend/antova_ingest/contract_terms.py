@@ -38,6 +38,9 @@ class TermSource:
     kind: Literal["document", "buyer_entered", "inherited"]
     values: dict[str, FieldValue]
     citations: tuple[Citation, ...]  # inherited: (incorporation clause, FA clause)
+    # The fields whose values come from the framework agreement through an incorporation clause (ruling R25):
+    # all of them for kind "inherited", the ones the offer is silent on for an offer that states the rest.
+    inherited_fields: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,9 @@ class ContractTerm:
     owner: TermSource | None
     state: State
     flags: tuple[dict, ...]  # precedence.flag(code, message) dicts
+    # An FA (as amended) is linked to the vendor's counterparty, even if it is silent on this term or was
+    # not read (ruling R26). False: no framework agreement for this vendor.
+    fa_present: bool
 
 
 # --- one field, while its documents are combined -------------------------------------------------
@@ -138,6 +144,8 @@ def _order_reason(entry: DocumentEntry, by_file: Mapping[str, DocumentEntry]) ->
 class _Resolved:
     source: TermSource | None
     conflicts: list[dict]
+    # The fields the documents state (a field in conflict included), and each one's citations.
+    field_citations: dict[str, tuple[Citation, ...]] = field(default_factory=dict)
 
 
 def _resolve_documents(param: ParameterDef, entries: list[DocumentEntry], by_file: Mapping[str, DocumentEntry],
@@ -164,7 +172,8 @@ def _resolve_documents(param: ParameterDef, entries: list[DocumentEntry], by_fil
     values = {name: slot.value for name, slot in state.items() if slot.value is not None}
     citations = tuple(dict.fromkeys(c for f in param.fields if f.name in state for c in state[f.name].citations))
     conflicts = [c for f in param.fields if f.name in state for c in state[f.name].conflicts]
-    return _Resolved(TermSource("document", values, citations), conflicts)
+    stated = {f.name: tuple(state[f.name].citations) for f in param.fields if f.name in state}
+    return _Resolved(TermSource("document", values, citations), conflicts, stated)
 
 
 def _passages(files: list[str], evidence: Mapping[str, list[Evidence]]) -> list[Evidence]:
@@ -280,12 +289,23 @@ def resolve_contract_terms(manifest: TenderManifest,
                 for f in form_flags.get(param.id, []):
                     add_flag(flags, f["code"], f["message"])
 
-            if offer.source is not None:
-                offered, state = offer.source, "cited"
-            elif incorporation and fa.source is not None:
-                citations = tuple(dict.fromkeys((*incorporation, *fa.source.citations)))  # CT-16 itself: one clause
-                offered = TermSource("inherited", dict(fa.source.values), citations)
+            # Ruling R25: with an incorporation clause, each field the offer is silent on takes the FA's value.
+            # A field the offer states, even in conflict, is never filled from the FA.
+            inherited = ([f.name for f in param.fields
+                          if f.name in fa.source.values and f.name not in offer.field_citations]
+                         if incorporation and fa.source is not None else [])
+            if inherited:
+                fa_cites = [c for name in inherited for c in fa.field_citations[name]]
+                own = offer.source.citations if offer.source is not None else ()
+                citations = tuple(dict.fromkeys((*own, *incorporation, *fa_cites)))  # CT-16 itself: one clause
+                values = {**(offer.source.values if offer.source is not None else {}),
+                          **{name: fa.source.values[name] for name in inherited}}
+                values = {f.name: values[f.name] for f in param.fields if f.name in values}  # ontology order
+                kind = "document" if offer.source is not None else "inherited"
+                offered = TermSource(kind, values, citations, frozenset(inherited))
                 state = "inherited"
+            elif offer.source is not None:
+                offered, state = offer.source, "cited"
             else:
                 offered, state = None, "missing"
                 if incorporation and not fa_docs:
@@ -297,7 +317,7 @@ def resolve_contract_terms(manifest: TenderManifest,
             if offer.conflicts or fa.conflicts or owner.conflicts:
                 state = "conflict"
             terms[(vendor_id, param.id)] = ContractTerm(param.id, vendor_id, offered, fa.source, owner_source,
-                                                        state, tuple(flags))
+                                                        state, tuple(flags), fa_present=bool(fa_docs))
     return terms
 
 

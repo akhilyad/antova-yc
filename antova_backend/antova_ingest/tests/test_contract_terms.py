@@ -123,12 +123,71 @@ def test_inherited_needs_incorporation_clause():
     assert term.offered.kind == "inherited"
     assert term.offered.values["title_event"].value == "delivery"
     assert term.offered.citations == (incorporation.citation, fa_title.citation)
+    assert term.offered.inherited_fields == {"title_event"}
 
     without = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [fa_title]})
     term = without[("vendor-a", "CT-09")]
     assert term.state == "missing"
     assert term.offered is None
     assert term.fa.values["title_event"].value == "delivery"
+
+
+LD_RATE_ONLY = "Liquidated damages for delay are 0.5% of the contract price per day."
+LD_RATE_AND_CAP = ("Liquidated damages for delay are 0.5% of the contract price per day, "
+                   "capped at 10% of the contract price.")
+
+
+def test_inheritance_is_per_field():
+    # Ruling R25: the offer states the LD rate and is silent on the cap; the cap comes from the FA.
+    offer_ld = _ev("bid-a.pdf", "CT-01", 21, LD_RATE_ONLY)
+    incorporation = _ev("bid-a.pdf", "CT-16", 20, INCORPORATION)
+    fa_ld = _ev("fa-a.pdf", "CT-01", 5, LD_RATE_AND_CAP)
+    assert set(offer_ld.values) == {"ld_rate"}
+    term = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [incorporation, offer_ld], "fa-a.pdf": [fa_ld]})[("vendor-a", "CT-01")]
+    assert term.state == "inherited"
+    assert term.offered.kind == "document"  # the offer states part of the term itself
+    assert term.offered.values["ld_rate"].value == (Decimal("0.5"), "day")
+    assert term.offered.values["ld_cap"].value == 10.0
+    assert term.offered.inherited_fields == {"ld_cap"}
+    assert term.offered.citations == (offer_ld.citation, incorporation.citation, fa_ld.citation)
+    assert term.flags == ()
+
+
+def test_partial_offer_without_incorporation_stays_cited():
+    offer_ld = _ev("bid-a.pdf", "CT-01", 21, LD_RATE_ONLY)
+    term = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [offer_ld], "fa-a.pdf": [_ev("fa-a.pdf", "CT-01", 5, LD_RATE_AND_CAP)]})[("vendor-a", "CT-01")]
+    assert term.state == "cited"
+    assert set(term.offered.values) == {"ld_rate"}
+    assert term.offered.inherited_fields == frozenset()
+    assert term.offered.citations == (offer_ld.citation,)
+
+
+def test_a_field_the_offer_states_in_conflict_is_not_filled_from_the_fa():
+    one = _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)
+    other = _ev("bid-a.pdf", "CT-03", 22, "The warranty period is 36 months from delivery.")
+    term = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [_ev("bid-a.pdf", "CT-16", 20, INCORPORATION), one, other],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", 4, WARRANTY_60)]})[("vendor-a", "CT-03")]
+    assert term.state == "conflict"
+    assert "warranty_months" not in term.offered.values
+    assert term.offered.inherited_fields == frozenset()
+
+
+def test_fa_present_even_when_the_fa_is_silent_on_the_term():
+    # Ruling R26: fa is None for a silent FA, but fa_present says an FA is linked.
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-09", 7, TITLE_ON_DELIVERY)]})
+    silent = terms[("vendor-a", "CT-03")]
+    assert silent.fa is None and silent.fa_present is True
+    assert terms[("vendor-a", "CT-09")].fa_present is True
+
+    none = resolve_contract_terms(_manifest([BID]), {"bid-a.pdf": []})[("vendor-a", "CT-03")]
+    assert none.fa is None and none.fa_present is False
+    unlinked = resolve_contract_terms(_manifest([BID.model_copy(update={"counterparty_id": None}), FA]),
+                                      {"bid-a.pdf": [], "fa-a.pdf": []})[("vendor-a", "CT-03")]
+    assert unlinked.fa_present is False
 
 
 def test_incorporation_clause_in_the_fa_also_counts():
