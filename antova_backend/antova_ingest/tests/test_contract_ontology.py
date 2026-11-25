@@ -204,6 +204,47 @@ NOT_A_VALUE = [
     ("performance_bond_pct", "The performance bond of 10% shall be reduced to 5% at delivery.", 10.0),
     ("ld_triggers", "LDs apply for late delivery; delays to PAC caused by the Buyer are excluded.", ("delivery",)),
     ("ld_triggers", "LDs are not applicable to late delivery.", None),
+    # Review round 2.
+    ("escalation_formula", "Prices are firm and not subject to any escalation or adjustment formula.", "none"),
+    ("escalation_formula", "There shall be no escalation or adjustment formula.", "none"),
+    ("escalation_formula", "The price is not subject to escalation. Price basis: steel index of January 2026.", "none"),
+    ("escalation_formula", "No price adjustment applies.", "none"),
+    ("escalation_formula", "The price is subject to escalation per the formula P = P0 x (0.15 + 0.85 Cu/Cu0).",
+     "formula"),
+    ("named_place", "Delivery terms: DAP Rotterdam, Incoterms 2020, including unloading.", "rotterdam"),
+    ("named_place", "DAP Rotterdam Incoterms 2020 and the risk passes on delivery.", "rotterdam"),
+    ("named_place", "DAP Site Rotterdam (Incoterms 2020).", "site rotterdam"),
+    ("named_place", "FCA Hamburg Incoterms 2020.", "hamburg"),
+    ("named_place", "DDP Site, Incoterms 2020, with the Seller bearing all duties.", "site"),
+    ("design_life_months", "The service period is 5 years from PAC.", None),
+    ("design_life_months", "The design period is 3 months.", None),
+    ("design_life_months", "Spare parts shall be available for a service period of 10 years.", None),
+    ("design_life_months", "The equipment has a design life of 25 (twenty-five) years.", 300),
+    ("design_life_months", "a 30-year design life", 360),
+    ("liability_exclusions", "The limitation of liability shall not apply in case of gross negligence or fraud. "
+                             "The Supplier shall not be liable for indirect loss.", ("gross_negligence", "fraud")),
+    ("liability_exclusions", "The limitation of liability shall not apply in case of gross negligence or fraud; "
+                             "the Supplier shall not be liable for indirect loss.", ("gross_negligence", "fraud")),
+    ("ntp_deadline_months", "Notice to proceed no later than 60 days from PO.", None),
+    ("ntp_deadline_months", "The Buyer shall issue the NTP within 30 days after receipt of the advance payment "
+                            "guarantee.", None),
+    ("ntp_deadline_months", "Delivery within 14 months after issue of the NTP no later than 2 months from PO.", None),
+    ("fa_reference", "This Order is subject to the Framework Agreement No. FA-2025-017 dated 10 January 2026.",
+     "framework agreement no. fa-2025-017 dated 10 january 2026"),
+    ("fa_reference", "This Order is subject to the Framework Agreement dated 10.01.2026.",
+     "framework agreement dated 10.01.2026"),
+    ("fa_reference", "The Framework Agreement shall apply. No changes to the delivery schedule.", "framework agreement"),
+    ("termination_fee_pct", "On termination for convenience the Buyer pays 10% of the price of undelivered Goods; "
+                            "the LD cap of 15% remains.", 10.0),
+    ("termination_fee_pct", "A termination fee of 5% of the price of the affected Goods.", 5.0),
+    ("performance_bond_pct", "Performance bond (10%) of the Contract Price.", 10.0),
+    ("ld_triggers", "LDs apply for late delivery and late PAC.", ("delivery", "pac")),
+    ("ld_triggers", "Delay in delivery: 0.5% per week. Delay in PAC: 1% per week.", ("delivery", "pac")),
+    ("warranty_coverage", "The warranty covers all components except as stated in Clause 5.", None),
+    ("warranty_on_site", "Delivery ex works; warranty repairs are made on site.", 1),
+    ("order", "In case of conflict the following order applies: Purchase Order, General Conditions of Purchase, "
+              "Annexes.", ("purchase_order", "general_conditions", "annexes")),
+    ("price_fixed_after_ntp", "The price is fixed from NTP; no part of the price is variable.", None),
 ]
 
 

@@ -425,11 +425,16 @@ _NTP_DEADLINE = re.compile(
     r"\b" + _NTP_WORDS + r"(?:\s*\([^)]{0,10}\))?\s+(?:shall|must|may|will|is\s+to|can)\s+be\s+(?:issued|given|served))"
     r"(?:\s+by\s+the\s+\w+)?\s+(?:within|no\s+later\s+than|not\s+later\s+than|at\s+the\s+latest\s+within|up\s+to)\s+"
     r"(?:[a-z\-]+\s+\(\s*)?(?<![\w.,])(\d+(?:[.,]\d+)?)\)?\s*((?:calendar\s+)?days?|months?)\b", re.IGNORECASE)
-_LIFE = r"(?:design|service|operating|useful)\s+(?:life|period)|lifetime|minimum\s+operating\s+period"
+# A life, not a period: "a service period of 10 years" (spare parts) or "the design period" is something else.
+# What an NTP deadline is counted from, when the text says: it must be the order (or the contract).
+_PERIOD_ANCHOR = re.compile(r"\s+(?:after|from|following|of)\s+", re.IGNORECASE)
+_ORDER_ANCHOR = re.compile(r"(?:the\s+)?(?:date\s+of\s+(?:the\s+)?)?(?:signature\s+of\s+(?:the\s+)?)?(?:project\s+)?"
+                           r"(?:purchase\s+order|(?-i:PO)\b|order\b|contract\b)", re.IGNORECASE)
+_LIFE = r"(?:design|service|operating|useful)\s+life|lifetime|minimum\s+operating\s+period"
 # A design life's own figure: right after the words ("design life of 30 years", "design life is thirty (30)
-# years"), with no other number between, or right before them ("a 30-year design life").
-_LIFE_AFTER = re.compile(r"(?:" + _LIFE + r")[^.;\d]{0,30}?(?<![\w.,])(\d+)\)?\s*-?\s*(years?|months?)\b",
-                         re.IGNORECASE)
+# years", "25 (twenty-five) years"), with no other number between, or right before them ("a 30-year design life").
+_LIFE_AFTER = re.compile(r"(?:" + _LIFE + r")[^.;\d]{0,30}?(?<![\w.,])(\d+)\)?(?:\s*\([^)\d]{1,20}\))?\s*-?\s*"
+                         r"(years?|months?)\b", re.IGNORECASE)
 _LIFE_BEFORE = re.compile(r"(?<![\w.,])(\d+)\s*-?\s*(years?|months?)\s+(?:minimum\s+)?(?:" + _LIFE + r")",
                           re.IGNORECASE)
 
@@ -449,6 +454,11 @@ def _parse_ntp_deadline(quote: str) -> FieldValue | None:
         m = _NTP_DEADLINE.search(s)
         if not m:
             continue
+        if re.search(r"\b(?:after|from|following|upon|since|of)\s+(?:the\s+)?$", s[:m.start()], re.IGNORECASE):
+            return None  # "within 14 months after issue of the NTP ...": the NTP is the start of another period
+        anchor = _PERIOD_ANCHOR.match(s, m.end())
+        if anchor and not _ORDER_ANCHOR.match(s, anchor.end()):
+            return None  # "within 30 days after receipt of the advance payment guarantee": not counted from the order
         if not m.group(1).isdigit():
             return None  # "1,5 months" or "1.5 months": not a whole number this reader turns into months
         number = int(m.group(1))
@@ -605,10 +615,11 @@ _BONDS = re.compile(
     r"(?P<performance_bond_pct>\bperformance\s+(?:bond|guarantee|security))|"
     r"(?P<advance_bond_pct>\badvance\s+payment\s+(?:bond|guarantee|security)|\bdown[- ]payment\s+(?:bond|guarantee|security))",
     re.IGNORECASE)
-# What may stand between a bond's name and its value: "of", "equal to ten percent (", "(the Bond) shall be".
+# What may stand between a bond's name and its value: "of", "equal to ten percent (", "(the Bond) shall be",
+# or an opening bracket ("Performance bond (10%) of the Contract Price").
 _BOND_GAP = re.compile(
     r"\s*(?:\([^)]{0,20}\)\s*)?(?:(?:shall\s+be|is|of|equal\s+to|amounting\s+to|in\s+the\s+(?:amount|value|sum)\s+of|"
-    r"for|valued\s+at|:|,)\s*)*(?:[a-z\-]+\s+(?:percent|per\s?cent)\s*\(\s*)?", re.IGNORECASE)
+    r"for|valued\s+at|:|,)\s*)*(?:[a-z\-]+\s+(?:percent|per\s?cent)\s*\(\s*|\(\s*)?", re.IGNORECASE)
 
 
 def _bond_named_before(field_name: str, before: str) -> bool:
@@ -1092,9 +1103,20 @@ _EXCLUSION = re.compile(r"\bexclud\w*|\bexcept\w*\b|\bsave\s+(?:for|where|that)\
 _NEGATED_BEFORE = re.compile(r"\b(?:not|no|never|without)\b(?:\s+\w+){0,2}\s*$", re.IGNORECASE)
 
 
-def _unnegated(pattern: re.Pattern, text: str) -> bool:
-    """Whether `pattern` occurs at least once in `text` without a negation in the few words before it."""
-    return any(not _NEGATED_BEFORE.search(text[max(0, m.start() - 30):m.start()]) for m in pattern.finditer(text))
+def _polarity(pattern: re.Pattern, text: str) -> set[str]:
+    """How each occurrence of `pattern` in `text` stands: "negated" (a "not" within two words before it, as
+    in "shall not be subject to escalation"), "unclear" (a negation earlier in the same clause, as in "no part
+    of the price is variable", which this reader does not try to scope) or "stated"."""
+    states = set()
+    for m in pattern.finditer(text):
+        clause = re.split(r"[.;,:]\s", text[:m.start()])[-1]
+        if _NEGATED_BEFORE.search(clause[-30:]):
+            states.add("negated")
+        elif _NEGATION.search(clause):
+            states.add("unclear")
+        else:
+            states.add("stated")
+    return states
 
 
 _ANY_EVENT = "|".join(f"(?:{pattern})" for _, pattern in _EVENT_PATTERNS)
@@ -1215,13 +1237,13 @@ _REMEDY = re.compile(r"warrant|repair|defect|remed|replac|rectif", re.IGNORECASE
 
 
 def _warranty_on_site(quote: str) -> FieldValue | None:
-    """1 when warranty repairs are made on site, 0 when at the factory (or at the supplier's choice of either)."""
-    text = _flat(quote)
-    if not _REMEDY.search(text):
-        return None
-    if _AT_FACTORY.search(text):
+    """1 when warranty repairs are made on site, 0 when at the factory (or at the supplier's choice of either).
+    Only clauses about repairs count: in "Delivery ex works; warranty repairs are made on site", ex works is
+    the Incoterm."""
+    clauses = [c for c in re.split(r"[;.]\s+|[;.]$", _flat(quote)) if _REMEDY.search(c)]
+    if any(_AT_FACTORY.search(c) for c in clauses):
         return FieldValue("scope", 0, "at the factory")
-    if _ON_SITE.search(text):
+    if any(_ON_SITE.search(c) for c in clauses):
         return FieldValue("scope", 1, "on site")
     return None
 
@@ -1237,6 +1259,7 @@ _LISTED_COMPONENTS = re.compile(
     r"\blimited\s+to\s+(?:the\s+)?(?:components|parts|items)\b|"
     r"\b(?:except|excluding|other\s+than)\b(?!\s+(?:for\s+)?(?:normal\s+|fair\s+)?wear\s+and\s+tear)|"
     r"\bwear(?:ing)?\s+parts\b|\bconsumables\b|\bnot\s+cover", re.IGNORECASE)
+_EXCEPT_AS_STATED = re.compile(r"\b(?:except|save|unless)\s+(?:as|where|otherwise)\b", re.IGNORECASE)
 
 
 def _warranty_coverage(quote: str) -> FieldValue | None:
@@ -1244,6 +1267,8 @@ def _warranty_coverage(quote: str) -> FieldValue | None:
     text = _flat(quote)
     if not _REMEDY.search(text):
         return None
+    if _EXCEPT_AS_STATED.search(text):
+        return None  # "except as stated in Clause 5": what is excepted is elsewhere
     if _LISTED_COMPONENTS.search(text):
         return FieldValue("scope", 0, "listed components only")
     if _ALL_COMPONENTS.search(text):
@@ -1276,9 +1301,10 @@ def _liability_exclusions(quote: str) -> FieldValue | None:
     """What the liability cap does not limit: "shall not apply in case of gross negligence, wilful misconduct
     or fraud" -> (gross_negligence, wilful_misconduct, fraud)."""
     found = []
-    for sentence in split_sentences(_flat(quote)):
+    clauses = [c for s in split_sentences(_flat(quote)) for c in re.split(r";\s*", s)]
+    for sentence in clauses:
         if _NO_LIABILITY.search(sentence):
-            return None  # a liability excluded outright is not a carve-out from the cap
+            continue  # a liability excluded outright ("not liable for indirect loss") is not a carve-out from the cap
         if not (_LIABILITY_CONTEXT.search(sentence) and _THE_CAP.search(sentence) and _CARVE_OUT.search(sentence)):
             continue
         found += [(code, shown) for code, shown, pattern in _LIABILITY_EXCLUSIONS
@@ -1290,21 +1316,27 @@ def _liability_exclusions(quote: str) -> FieldValue | None:
     return FieldValue("scope", tuple(c for c, _ in found), ", ".join(s for _, s in found))
 
 
-_NAMED_PLACE = re.compile(
-    r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\b(?P<rest>[^;()]*?)"
-    r"\s*(?=\(|;|\bper\b|\baccording\b|\bin\s+accordance\b|\.(?:\s|$)|$)")
-_PLACE_NOISE = re.compile(r"\b(?:ICC\s+)?Incoterms(?:®)?(?:\s+\d{4})?\b|\bnamed\s+place\b\s*:?", re.IGNORECASE)
+_INCOTERM_CODE = re.compile(r"\b(?:EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\b")
+_INCOTERMS_EDITION = r"(?:ICC\s+)?Incoterms(?:®)?(?:\s+\d{4})?"
+# Before the place, an edition or "named place" may stand ("FCA, Incoterms 2020, named place Hamburg").
+_PLACE_LEAD = re.compile(r"[\s,:]*(?:" + _INCOTERMS_EDITION + r"[\s,:]*)?(?:named\s+place\b[\s,:]*)?", re.IGNORECASE)
+# The place ends at the edition, a bracket, a clause break or the words that start the rest of the sentence.
+_PLACE_END = re.compile(
+    r"\s*(?:\(|;|\b" + _INCOTERMS_EDITION + r"|\bper\b|\baccording\b|\bin\s+accordance\b|,?\s+(?:including|incl\.|"
+    r"excluding|with|and|where|which|whereby|for|to\s+be|at\s+the)\b|\.(?:\s|$)|$)", re.IGNORECASE)
 
 
 def _named_place(quote: str) -> FieldValue | None:
     """The place named after the Incoterm: "DAP Site Rotterdam (Incoterms 2020)" -> "site rotterdam",
-    "FCA, Incoterms 2020, named place Hamburg" -> "hamburg". The Incoterms edition is not part of the place."""
+    "FCA, Incoterms 2020, named place Hamburg" -> "hamburg". The place is cut at the Incoterms edition and at
+    the words that carry on the sentence ("DAP Rotterdam, Incoterms 2020, including unloading" -> "rotterdam")."""
     for sentence in split_sentences(_flat(quote)):
-        m = _NAMED_PLACE.search(sentence)
+        m = _INCOTERM_CODE.search(sentence)
         if not m:
             continue
-        parts = [part.strip(" .:") for part in _PLACE_NOISE.sub(",", m.group("rest")).split(",")]
-        shown = ", ".join(part for part in parts if part)
+        start = _PLACE_LEAD.match(sentence, m.end()).end()
+        end = _PLACE_END.search(sentence, start)
+        shown = sentence[start:end.start() if end else len(sentence)].strip(" ,.:")
         if shown and shown[0].isupper():
             return FieldValue("scope", shown.lower(), shown)
     return None
@@ -1347,7 +1379,10 @@ _FIXED_UNTIL_NTP = re.compile(r"\b(?:fixed|firm)\b[^.;]{0,40}\buntil\b[^.;]{0,30
 def _price_fixed_after_ntp(quote: str) -> FieldValue | None:
     """1 when the price is fixed once the NTP is issued, 0 when it may still move (escalation, variable)."""
     text = _flat(quote)
-    if _unnegated(_MOVES, text) or _FIXED_UNTIL_NTP.search(text):
+    moves = _polarity(_MOVES, text)
+    if "unclear" in moves:
+        return None  # "no part of the price is variable": a negation this reader does not scope
+    if "stated" in moves or _FIXED_UNTIL_NTP.search(text):
         return FieldValue("scope", 0, "not fixed after NTP")
     if _FIXED_AFTER_NTP.search(text):
         return FieldValue("scope", 1, "fixed after NTP")
@@ -1363,11 +1398,14 @@ _PRICE_TYPES = {"fixed_lump_sum": "fixed lump sum", "partly_variable": "partly v
 def _price_type(quote: str) -> FieldValue | None:
     """fixed_lump_sum, partly_variable or variable. A lump sum that is still adjusted is partly variable."""
     text = _flat(quote)
-    if _unnegated(_PARTLY_VARIABLE, text):
+    partly, lump, moves = (_polarity(p, text) for p in (_PARTLY_VARIABLE, _LUMP_SUM, _MOVES))
+    if "unclear" in partly | lump | moves:
+        return None
+    if "stated" in partly:
         code = "partly_variable"
-    elif _unnegated(_LUMP_SUM, text):
-        code = "partly_variable" if _unnegated(_MOVES, text) else "fixed_lump_sum"
-    elif _unnegated(_MOVES, text):
+    elif "stated" in lump:
+        code = "partly_variable" if "stated" in moves else "fixed_lump_sum"
+    elif "stated" in moves:
         code = "variable"
     else:
         return None
@@ -1379,18 +1417,21 @@ _NO_ESCALATION = re.compile(
     r"\bnot\s+(?:be\s+)?subject\s+to\s+(?:any\s+)?(?:price\s+)?(?:escalation|adjustment|variation|indexation)\b|"
     r"\bwithout\s+(?:any\s+)?(?:price\s+)?(?:escalation|adjustment)\b", re.IGNORECASE)
 _ESCALATION_WORD = re.compile(r"\b(?:escalat|adjust|indexat|variation)\w*", re.IGNORECASE)
-_FORMULA = re.compile(r"\bformula\b|\b[A-Z]\w{0,3}\s*=\s*\S|\bindex\b", re.IGNORECASE)
+# A formula is the word or an equation ("P = P0 x ..."). A bare "index" is not one ("steel index of January").
+_FORMULA = re.compile(r"\bformula\b|\b[A-Z]\w{0,3}\s*=\s*\S", re.IGNORECASE)
 # "No escalation applies before NTP": a limit in time, which says nothing about after it.
 _NO_ESCALATION_UNTIL = re.compile(r"\b(?:before|until|prior\s+to|up\s+to)\b", re.IGNORECASE)
 
 
 def _escalation_formula(quote: str) -> FieldValue | None:
     """Whether the price has an escalation formula: "none", or "formula". The formula itself is quoted and
-    cited, not computed (spec 4.2, v1): only its presence is a value. A formula anywhere in the quote wins
-    over a "no escalation" limited in time; "no escalation formula" is no formula."""
+    cited, not computed (spec 4.2, v1): only its presence is a value. A formula counts only in a clause that
+    names escalation or adjustment and has no negation anywhere in it ("not subject to any escalation or
+    adjustment formula" is none). Such a clause wins over a "no escalation" limited in time."""
     text = _flat(quote)
-    if _ESCALATION_WORD.search(text) and _unnegated(_FORMULA, text):
-        return FieldValue("scope", "formula", "escalation formula (quoted, not computed)")
+    for clause in re.split(r"[;.]\s+|[;.]$", text):
+        if _FORMULA.search(clause) and _ESCALATION_WORD.search(clause) and not _NEGATION.search(clause):
+            return FieldValue("scope", "formula", "escalation formula (quoted, not computed)")
     m = _NO_ESCALATION.search(text)
     if m:
         if _NO_ESCALATION_UNTIL.search(text[m.end():m.end() + 40]):
