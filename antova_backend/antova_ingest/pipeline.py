@@ -321,10 +321,12 @@ def contract_pass_refused_warning(file: str) -> str:
 
 
 def needs_contract_pass(manifest: TenderManifest) -> bool:
-    """A tender goes to contract approval when it has a contract document or buyer-entered owner terms;
-    only then are its bids located a second time, for their contract terms."""
+    """A tender goes to contract approval when it has a contract document, buyer-entered owner terms or
+    a frozen budget (an approval sheet for a single direct offer, ruling R23); only then are its bids
+    located a second time, for their contract terms."""
+    project = manifest.project
     return (any(entry.role in CONTRACT_ROLES for entry in manifest.documents)
-            or bool(manifest.project and manifest.project.owner_terms))
+            or bool(project and (project.owner_terms or project.frozen_budget)))
 
 
 _CONTRACT_PARAM_IDS = [p.id for p in CONTRACT_PARAMETERS]

@@ -233,3 +233,32 @@ def test_chat_locator_contract_pass_has_its_own_prompt_and_key(tmp_path, monkeyp
     doc = _doc()
     assert locator.store.key_for(doc) != locator.store.key_for(doc, contract=True)
     assert locator.store.contract_salt and locator.store.contract_salt != locator.store.salt
+
+
+def test_a_frozen_budget_alone_triggers_the_bids_contract_pass(tmp_path, expected, baseline):
+    # Ruling R23: no FA and no owner terms, but a frozen budget: the buyer wants an approval sheet.
+    folder = tmp_path / PACK.name
+    shutil.copytree(PACK, folder, ignore=shutil.ignore_patterns("runs", "saved_responses"))
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest["project"] = {"frozen_budget": {"amount": "2500000", "currency": "EUR"}}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    locator = Recording(expected)
+    run = run_ingest(folder, locator=locator)
+    assert {file for file, contract in locator.calls if contract} == BIDS
+    located = json.loads(run.artifacts["located"].body)
+    assert set(located["contract_outcomes"]) == BIDS
+    assert _statuses(run) == _statuses(baseline)
+
+
+def test_a_frozen_budget_without_a_reference_holds_the_bids_contract_terms_back(tmp_path, expected):
+    folder = tmp_path / PACK.name
+    shutil.copytree(PACK, folder, ignore=shutil.ignore_patterns("runs", "saved_responses"))
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest["synthetic"] = False
+    manifest["project"] = {"frozen_budget": {"amount": "2500000", "currency": "EUR"}}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    locator = Recording(expected)
+    run = run_ingest(folder, locator=locator)
+    assert not any(contract for _, contract in locator.calls)
+    assert sum(w.endswith("contract terms not read. Contract documents go only to a model provider with a "
+                          "zero-retention agreement; set ANTOVA_ZERO_RETENTION_REF.") for w in run.warnings) == 3
