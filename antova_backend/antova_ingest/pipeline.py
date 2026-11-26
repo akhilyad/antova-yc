@@ -969,7 +969,8 @@ def _finish(arts: dict[str, StageArtifact], fingerprint: dict, started: float, s
         entry = entries[data["file"]]
         blank = [p["number"] for p in data["pages"] if not p["has_text"]]
         documents.append(SourceDocumentInfo(entry.file, entry.role, entry.vendor_id, data["sha256"],
-                                            len(data["pages"]), blank))
+                                            len(data["pages"]), blank, counterparty_id=entry.counterparty_id,
+                                            amends=entry.amends, dated=entry.dated))
     stats = dict(leveled["stats"])
     stats["duration_s"] = round(duration, 2)
     stats["run_fingerprint"] = fingerprint.get("fingerprint", "")

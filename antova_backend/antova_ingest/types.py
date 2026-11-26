@@ -367,6 +367,10 @@ class SourceDocumentInfo:
     sha256: str
     page_count: int
     pages_without_text: list[int] = field(default_factory=list)
+    # From the manifest entry (contract roles): the counterparty, the file it amends, its date.
+    counterparty_id: str | None = None
+    amends: str | None = None
+    dated: date | None = None
 
 
 @dataclass
