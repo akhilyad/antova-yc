@@ -498,12 +498,7 @@
         {
           "param_id": "CT-13",
           "page": 4,
-          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
-        },
-        {
-          "param_id": "CT-13",
-          "page": 4,
-          "quote": "The Contract Price is a fixed lump sum."
+          "quote": "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
         },
         {
           "param_id": "CT-07",
@@ -636,12 +631,7 @@
         {
           "param_id": "CT-13",
           "page": 4,
-          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
-        },
-        {
-          "param_id": "CT-13",
-          "page": 4,
-          "quote": "The Contract Price is a fixed lump sum."
+          "quote": "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
         },
         {
           "param_id": "CT-07",
@@ -760,11 +750,6 @@
           "quote": "Liquidated damages are capped at 10 % of the Contract Price."
         },
         {
-          "param_id": "CT-02",
-          "page": 3,
-          "quote": "The Contractor's total liability is limited to 100% of the Contract Price."
-        },
-        {
           "param_id": "CT-03",
           "page": 3,
           "quote": "The warranty period is 24 months from PAC."
@@ -858,7 +843,7 @@
         {
           "param_id": "CT-02",
           "page": 21,
-          "quote": "The Supplier's total liability is limited to GBP 400,000."
+          "quote": "The Supplier's total liability is limited to GBP 350,000."
         },
         {
           "param_id": "CT-03",
@@ -918,8 +903,7 @@
         "page": 4,
         "quotes": [
           "The Contract Price is in EUR.",
-          "The price is fixed and firm from the issue of the Notice to Proceed.",
-          "The Contract Price is a fixed lump sum."
+          "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
         ],
         "values": {
           "price_currency": "EUR",
@@ -1086,8 +1070,7 @@
         "page": 4,
         "quotes": [
           "The Contract Price is in EUR.",
-          "The price is fixed and firm from the issue of the Notice to Proceed.",
-          "The Contract Price is a fixed lump sum."
+          "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
         ],
         "values": {
           "price_currency": "EUR",
@@ -1232,15 +1215,6 @@
           "ld_cap": "10 %"
         }
       },
-      "CT-02": {
-        "page": 3,
-        "quotes": [
-          "The Contractor's total liability is limited to 100% of the Contract Price."
-        ],
-        "values": {
-          "liability_cap": "100 %"
-        }
-      },
       "CT-03": {
         "page": 3,
         "quotes": [
@@ -1382,10 +1356,10 @@
       "CT-02": {
         "page": 21,
         "quotes": [
-          "The Supplier's total liability is limited to GBP 400,000."
+          "The Supplier's total liability is limited to GBP 350,000."
         ],
         "values": {
-          "liability_cap_money": "GBP 400,000"
+          "liability_cap_money": "GBP 350,000"
         }
       },
       "CT-03": {

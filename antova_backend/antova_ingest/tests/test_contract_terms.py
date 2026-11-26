@@ -562,3 +562,24 @@ def test_an_ld_exclusion_in_an_unread_offer_is_not_kept():
     waiver = _ev("bid-a.pdf", "CT-01", 12, LD_WAIVER)
     term = resolve_contract_terms(_manifest([BID, other]), {"bid-a.pdf": [waiver]})[("vendor-a", "CT-01")]
     assert term.ld_exclusion_passages == ()
+
+
+def test_a_term_marked_manual_is_missing_with_its_reason(monkeypatch):
+    """Ruling R7: a term whose locate_hint starts "MANUAL:" (below the recall bar) is never taken from the
+    documents; it is missing, with the reason, so a person checks it by hand."""
+    import dataclasses
+
+    from antova_ingest import contract_terms
+    from antova_ingest.contract_ontology import MANUAL_PREFIX, MANUAL_REASON
+
+    manual = tuple(dataclasses.replace(p, locate_hint=f"{MANUAL_PREFIX} {p.locate_hint}") if p.id == "CT-09" else p
+                   for p in CONTRACT_PARAMETERS)
+    monkeypatch.setattr(contract_terms, "CONTRACT_PARAMETERS", manual)
+    terms = resolve_contract_terms(_manifest([BID, FA]), {
+        "bid-a.pdf": [_ev("bid-a.pdf", "CT-09", 21, TITLE_ON_DELIVERY), _ev("bid-a.pdf", "CT-03", 21, WARRANTY_24)],
+        "fa-a.pdf": [_ev("fa-a.pdf", "CT-09", 4, TITLE_ON_DELIVERY)]})
+    term = terms[("vendor-a", "CT-09")]
+    assert (term.state, term.offered, term.fa, term.owner) == ("missing", None, None, None)
+    assert [(f["code"], f["message"]) for f in term.flags] == [("manual_term", MANUAL_REASON)]
+    assert MANUAL_REASON == "not reliably found; check by hand"
+    assert terms[("vendor-a", "CT-03")].state == "cited"  # other terms are read as before

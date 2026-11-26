@@ -90,6 +90,9 @@ class _Terms:
         term = self.by_id.get(param_id)
         if term is None:
             return _missing(label, f"{param.name} was not assessed for this vendor")
+        manual = next((f for f in term.get("flags") or [] if f.get("code") == "manual_term"), None)
+        if manual is not None:  # ruling R7: below the recall bar
+            return _missing(label, manual.get("message") or NOT_KNOWN)
         side = term.get(source)
         value = (side or {}).get("values", {}).get(name)
         where = {"offered": "the offer", "fa": "the framework agreement", "owner": "the owner contract"}[source]

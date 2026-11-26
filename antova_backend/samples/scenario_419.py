@@ -8,7 +8,9 @@ it holds framework agreements with, against the TENDER-2026-402 Material Requisi
   Conversion AG (the counterparty links them, never the name), amended later (warranty 60 -> 66 months).
   The offer deliberately differs: an LD cap of 5% against the agreement's 10%; a warranty from delivery
   where the owner contract runs it from PAC; silent on title, which it inherits through its incorporation
-  clause (CT-16); and a liability cap in GBP where the agreement states EUR.
+  clause (CT-16); and a liability cap of GBP 350,000 where the agreement states EUR 450,000 (EUR 409,500 at
+  the buyer's rate, short of it). The owner excerpt states no liability cap: its 100% of the owner contract value
+  against a package cap would be an exposure in the tens of millions, which is not the point of this pack.
 
 On the equipment side both bids are the 402 scenario's fully compliant bid, so the TBE has no deviation
 and every contract difference comes from the contract terms alone.
@@ -90,8 +92,9 @@ def _fa(key: str, *, liability: str, warranty_months: int, insurer: str) -> list
         (3, "CT-10", "The Buyer may issue the NTP within 8 months from the Project Purchase Order."),
         (3, "CT-01", _LD_RATE), (3, "CT-01", _LD_CAP_10), (3, "CT-01", _LD_TRIGGERS),
         (4, "CT-13", "The Contract Price is in EUR."),
-        (4, "CT-13", "The price is fixed and firm from the issue of the Notice to Proceed."),
-        (4, "CT-13", "The Contract Price is a fixed lump sum."),
+        # One sentence for both: each price-basis sentence is also captured as the (citation-only) escalation
+        # clause, and two different ones would be a conflict.
+        (4, "CT-13", "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."),
         (4, "CT-07", "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."),
         (4, "CT-06", "The advance payment is made against an advance payment bond of 10%."),
         (5, "CT-04", "The Supplier provides a warranty bond of 5% of the Contract Price."),
@@ -130,7 +133,6 @@ CONTRACT_EVIDENCE: dict[str, list[Ev]] = {
     FA_KESTREL_AMENDMENT: _keyed("amd", [(2, "CT-03", "The warranty period is 66 months from PAC.")]),
     OWNER_FILE: _keyed("own", [
         (2, "CT-01", _LD_RATE), (2, "CT-01", _LD_CAP_10),
-        (3, "CT-02", "The Contractor's total liability is limited to 100% of the Contract Price."),
         (3, "CT-03", "The warranty period is 24 months from PAC."),
         (3, "CT-09", "Title to the Goods passes to the Buyer on delivery."),
         (4, "CT-14", "This contract is governed by the laws of England and Wales."),
@@ -155,7 +157,7 @@ CONTRACT_EVIDENCE: dict[str, list[Ev]] = {
         (21, "CT-12", _DELIVERY),
         (21, "CT-01", "Liquidated damages of 0.5% of the Contract Price per week of delay, capped at 5% of "
                       "the Contract Price."),
-        (21, "CT-02", "The Supplier's total liability is limited to GBP 400,000."),
+        (21, "CT-02", "The Supplier's total liability is limited to GBP 350,000."),
         (21, "CT-03", "The warranty period is 36 months from delivery."),
     ]),
 }
@@ -193,7 +195,6 @@ CONTRACT_VALUES: dict[str, dict[str, dict[str, str]]] = {
     FA_KESTREL_AMENDMENT: {"CT-03": {"warranty_months": "66", "warranty_start": "PAC"}},
     OWNER_FILE: {
         "CT-01": {"ld_rate": "0.5% per week", "ld_cap": "10 %"},
-        "CT-02": {"liability_cap": "100 %"},
         "CT-03": {"warranty_months": "24", "warranty_start": "PAC"},
         "CT-09": {"title_event": "delivery"},
         "CT-14": {"law": "English law", "forum": "ICC arbitration"},
@@ -212,7 +213,7 @@ CONTRACT_VALUES: dict[str, dict[str, dict[str, str]]] = {
         "CT-13": {"price_currency": "EUR"},
         "CT-12": _DELIVERY_PLACE,
         "CT-01": {"ld_rate": "0.5% per week", "ld_cap": "5 %"},
-        "CT-02": {"liability_cap_money": "GBP 400,000"},
+        "CT-02": {"liability_cap_money": "GBP 350,000"},
         "CT-03": {"warranty_months": "36", "warranty_start": "delivery"},
     },
 }
@@ -308,7 +309,7 @@ def documents() -> list[DocumentSpec]:
     docs.append(_contract_document(
         OWNER_FILE, "EPC Contract — Excerpt of the Pass-Down Terms",
         [f"between {OWNER} (the Employer)", f"and {EPC} (the Contractor)", "Dated 30 June 2026"],
-        {2: "1. DELAY DAMAGES", 3: "2. LIABILITY, WARRANTY AND TITLE", 4: "3. LAW AND DISPUTES"}, 4))
+        {2: "1. DELAY DAMAGES", 3: "2. WARRANTY AND TITLE", 4: "3. LAW AND DISPUTES"}, 4))
     return docs
 
 

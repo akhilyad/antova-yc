@@ -189,6 +189,15 @@ CONTRACT_PARAMETERS: tuple[ParameterDef, ...] = (
 
 CONTRACT_PARAMS_BY_ID: dict[str, ParameterDef] = {p.id: p for p in CONTRACT_PARAMETERS}
 
+# Ruling R7 (docs/contract-recall.md): a term below the recall bar is marked manual by starting its locate_hint
+# with MANUAL_PREFIX. The contracted stage then never takes it from the documents: it is missing, with this reason.
+MANUAL_PREFIX = "MANUAL:"
+MANUAL_REASON = "not reliably found; check by hand"
+
+
+def is_manual(param: ParameterDef) -> bool:
+    return param.locate_hint.startswith(MANUAL_PREFIX)
+
 # The equipment parameter that holds the same term in the TBE, for the CAS's MR column.
 TBE_EQUIVALENT: dict[str, str] = {"CT-01": "PARAM-10", "CT-02": "PARAM-11", "CT-12": "PARAM-06"}
 

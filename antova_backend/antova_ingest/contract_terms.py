@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from typing import Literal
 
-from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID, MANUAL_REASON, is_manual
 from antova_ingest.ontology import ParameterDef
 from antova_ingest.precedence import _tier, add_flag, flag
 from antova_ingest.types import Citation, DocumentEntry, Evidence, FieldValue, OwnerTerms, TenderManifest
@@ -332,6 +332,11 @@ def resolve_contract_terms(manifest: TenderManifest,
 
         for param in CONTRACT_PARAMETERS:
             flags = list(vendor_flags)
+            if is_manual(param):  # ruling R7: below the recall bar, so a person checks it by hand
+                terms[(vendor_id, param.id)] = ContractTerm(
+                    param.id, vendor_id, None, None, None, "missing",
+                    (*flags, flag("manual_term", MANUAL_REASON)), fa_present=bool(fa_docs))
+                continue
             offer = _resolve_documents(param, bids, by_file, evidence)
             fa = _resolve_documents(param, fa_docs, by_file, evidence)
             owner = _resolve_documents(param, owner_docs, by_file, evidence)

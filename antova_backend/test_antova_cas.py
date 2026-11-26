@@ -359,3 +359,14 @@ def test_an_unknown_finding_category_fails_loudly(tender_418):
     finding = {"id": "f1", "category": "a-new-category", "message": "m", "money": [], "gap": None, "citations": []}
     with pytest.raises(ValueError, match="unknown category"):
         _risks(loaded, "vendor-b", [finding], {})
+
+
+def test_a_manual_term_shows_its_reason_on_the_sheet():
+    from antova_cas import _Terms
+    from antova_ingest.contract_ontology import MANUAL_REASON
+
+    term = {"param_id": "CT-09", "vendor_id": "vendor-b", "state": "missing", "offered": None, "fa": None,
+            "owner": None, "flags": [{"code": "manual_term", "message": MANUAL_REASON}]}
+    for source in ("offered", "fa", "owner"):
+        field = _Terms([term], []).field("CT-09", "title_event", source)
+        assert (field["state"], field["reason"]) == ("missing", MANUAL_REASON)
