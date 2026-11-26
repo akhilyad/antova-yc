@@ -187,15 +187,15 @@ def to_csv(rows: list[dict]) -> str:
     return buffer.getvalue()
 
 
-def contract_rows(findings: list[dict], dispositions: list[dict], *, tender_id: str = "",
-                  vendor_names: dict[str, str] | None = None, shareable_files: set[str] | None = None) -> list[dict]:
+def contract_rows(findings: list[dict], dispositions: list[dict], *, shareable_files: set[str], tender_id: str = "",
+                  vendor_names: dict[str, str] | None = None) -> list[dict]:
     """One negotiation question per finding whose latest disposition is `negotiate`.
 
     A fixed template per contract parameter: the question names the term and the pages it rests on, never
     the finding's message, so the buyer's budget, owner contract figures and exposures stay out of a file
     sent to the vendor. A disposition that is stale (the finding changed or is gone) asks nothing until a
-    reviewer decides again. `shareable_files`, when given, limits the citations to those documents (the
-    vendor's own bid and the framework agreement, not the owner contract).
+    reviewer decides again. `shareable_files` (required: there is no unfiltered default) limits the citations
+    to those documents: the vendor's own bid and the framework agreement, never the owner contract.
     """
     from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
 
@@ -209,7 +209,7 @@ def contract_rows(findings: list[dict], dispositions: list[dict], *, tender_id: 
         param_id = finding.get("param_id")
         param = CONTRACT_PARAMS_BY_ID.get(param_id) if param_id else None
         citations = [c for c in finding.get("citations") or []
-                     if shareable_files is None or c.get("filename") in shareable_files]
+                     if c.get("filename") in shareable_files]
         cited = _cite(*citations)
         at = f" (see {cited})" if cited else ""
         if param is None:

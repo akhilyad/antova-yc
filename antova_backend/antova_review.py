@@ -44,10 +44,17 @@ _REVIEW_MESSAGES = {
 
 @dataclass
 class OpenItem:
-    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag", "project_field"]
+    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag", "project_field",
+                  "contract_cell", "finding", "stale_disposition", "fa_changed"]
     vendor_id: str
     param_id: Optional[str]
     message: str
+
+
+@dataclass
+class ContractOpenItem(OpenItem):
+    """An open item of a vendor's contract gate; a finding's items name the finding."""
+    finding_id: Optional[str] = None
 
 
 def _item(kind: str, vendor_id: str, param_id: Optional[str] = None) -> OpenItem:
@@ -163,6 +170,79 @@ def open_items(tender: TenderPackage, overrides: Mapping[tuple[str, str], Overri
                 items.append(_item("unpriced", v.id, p.id))
             if cell.status == ComplianceStatus.MANUAL_INSPECTION_REQUIRED:
                 items.append(_item("needs_inspection", v.id, p.id))
+    return items
+
+
+# --- the contract gate (per vendor; never part of the TBE open items above) -------------------------
+
+CONTRACT_PREFIX = "CT-"
+PRECEDENCE_TERM = "CT-17"
+CONTRACT_MESSAGES = {
+    "conflict": "The documents disagree on this term. Review it.",
+    "flag": "Flag not reviewed yet.",
+    "precedence": "Confirm the order of precedence for this vendor.",
+    "stale": "The term changed after you reviewed it. Review it again.",
+    "rejected": "You rejected this term. Correct the documents and process them again.",
+    "finding": "Decide on this finding: accept, negotiate or waiver needed.",
+    "stale_disposition": "The finding changed after you decided on it. Decide again.",
+    "fa_changed": "The framework agreement for this vendor changed in another tender. Re-run this tender.",
+}
+
+
+def contract_cell_needs_review(term: Mapping[str, Any]) -> bool:
+    """A conflict, a flagged term, or a cited CT-17 (the reviewer confirms the precedence order)."""
+    if term.get("state") == "conflict" or term.get("flags"):
+        return True
+    return term.get("param_id") == PRECEDENCE_TERM and term.get("state") in ("cited", "inherited")
+
+
+def contract_cell_state(term: Mapping[str, Any], review: Optional[Mapping[str, Any]]) -> str:
+    """none (nothing to review), open, reviewed, stale or rejected, against the term's stored evidence_hash."""
+    if not contract_cell_needs_review(term):
+        return "none"
+    if review is None:
+        return "open"
+    if review["evidence_hash"] != term["evidence_hash"]:
+        return "stale"
+    return "rejected" if review["action"] == "reject" else "reviewed"
+
+
+def _open_message(term: Mapping[str, Any]) -> str:
+    if term.get("state") == "conflict":
+        return CONTRACT_MESSAGES["conflict"]
+    if term.get("flags"):
+        return CONTRACT_MESSAGES["flag"]
+    return CONTRACT_MESSAGES["precedence"]
+
+
+def contract_open_items(terms, findings, dispositions, cell_reviews, fa_version_now: Optional[str],
+                        fa_version_at_ingest: Optional[str]) -> list[OpenItem]:
+    """What blocks one vendor's contract gate: the framework agreement changed since ingest; contract cells
+    (conflict, flagged, or a cited CT-17) not reviewed, stale or rejected; findings without a disposition;
+    findings whose latest disposition is stale. `terms` carry their evidence_hash; `dispositions` are the
+    latest per finding with their state; `cell_reviews` map (param_id, vendor_id) to the latest review.
+    None vs None for the fa versions is unchanged (no agreement then or now)."""
+    items: list[OpenItem] = []
+    vendor_ids = [t["vendor_id"] for t in terms] + [f["vendor_id"] for f in findings]
+    vendor_id = vendor_ids[0] if vendor_ids else ""
+    if fa_version_now != fa_version_at_ingest:
+        items.append(ContractOpenItem(kind="fa_changed", vendor_id=vendor_id, param_id=None,
+                                      message=CONTRACT_MESSAGES["fa_changed"]))
+    for term in terms:
+        state = contract_cell_state(term, cell_reviews.get((term["param_id"], term["vendor_id"])))
+        if state == "none" or state == "reviewed":
+            continue
+        message = _open_message(term) if state == "open" else CONTRACT_MESSAGES[state]
+        items.append(ContractOpenItem(kind="contract_cell", vendor_id=term["vendor_id"], param_id=term["param_id"],
+                                      message=message))
+    latest = {d["finding_id"]: d for d in dispositions}
+    for finding in findings:
+        decided = latest.get(finding["id"])
+        if decided is not None and decided["state"] == "current":
+            continue
+        kind = "finding" if decided is None else "stale_disposition"
+        items.append(ContractOpenItem(kind=kind, vendor_id=finding["vendor_id"], param_id=finding.get("param_id"),
+                                      message=CONTRACT_MESSAGES[kind], finding_id=finding["id"]))
     return items
 
 

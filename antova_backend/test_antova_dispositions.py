@@ -138,9 +138,10 @@ def test_disposition_goes_stale_on_reingest(client, ingested):
 def test_latest_disposition_counts_and_stale_negotiation_asks_nothing():
     finding = _finding(FA_ID, "CT-03", "fa_conformance", 24)
     current = {"finding_id": FA_ID, "disposition": "negotiate", "evidence_hash": finding["evidence_hash"]}
-    assert len(clarify.contract_rows([finding], [current])) == 1
-    assert clarify.contract_rows([finding], [{**current, "evidence_hash": "old"}]) == []
-    assert clarify.contract_rows([finding], [{**current, "disposition": "accept"}]) == []
+    shareable = {"Bid_vendor-b_VoltSwitch.pdf"}
+    assert len(clarify.contract_rows([finding], [current], shareable_files=shareable)) == 1
+    assert clarify.contract_rows([finding], [{**current, "evidence_hash": "old"}], shareable_files=shareable) == []
+    assert clarify.contract_rows([finding], [{**current, "disposition": "accept"}], shareable_files=shareable) == []
 
 
 def test_verified_gate_freezes_dispositions(client):

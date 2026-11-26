@@ -621,11 +621,31 @@ class TenderRepository:
                 fa_version=fa_version(self.db, counterparty) if counterparty else None,
             ))
 
-    def contract_findings(self, tender_id: str) -> list[dict]:
-        """The contract findings of the tender's latest run, from its contracted artifact; [] when none."""
+    def contracted_body(self, tender_id: str) -> dict:
+        """The contracted stage body of the tender's latest run; {} when none."""
         run = self.get_run(tender_id)
         artifact = self.get_stage_artifacts(run["run_id"]).get("contracted") if run else None
-        return (artifact.load().get("findings") or []) if artifact is not None else []
+        return artifact.load() if artifact is not None else {}
+
+    def contract_findings(self, tender_id: str) -> list[dict]:
+        """The contract findings of the tender's latest run, from its contracted artifact; [] when none."""
+        return self.contracted_body(tender_id).get("findings") or []
+
+    def contract_terms(self, tender_id: str, vendor_id: str) -> list[dict]:
+        """The vendor's stored contract terms, each body with its evidence_hash, in ontology order."""
+        from antova_ingest.contract_ontology import CONTRACT_PARAMETERS
+
+        order = {p.id: i for i, p in enumerate(CONTRACT_PARAMETERS)}
+        records = self.db.query(ContractTermRecord).filter_by(tender_id=tender_id, vendor_id=vendor_id).all()
+        terms = [{**json.loads(r.body), "evidence_hash": r.evidence_hash} for r in records]
+        return sorted(terms, key=lambda t: order.get(t["param_id"], len(order)))
+
+    def vendor_counterparty(self, tender_id: str, vendor_id: str) -> Optional[str]:
+        """The vendor's counterparty: the one a person linked, else the one its bid documents name."""
+        vendor = self.db.get(VendorRecord, (tender_id, vendor_id))
+        if vendor is not None and vendor.counterparty_id:
+            return vendor.counterparty_id
+        return _bid_counterparty(self.db.query(SourceDocumentRecord).filter_by(tender_id=tender_id).all(), vendor_id)
 
     def put_project(self, project_id: str, name: str, buyer_entity: str, owner_terms: Any = None, *,
                     at: datetime) -> None:
@@ -958,13 +978,16 @@ def _bid_counterparty(documents: list, vendor_id: str) -> Optional[str]:
     return next(iter(named)) if len(named) == 1 else None
 
 
-def fa_version(db: Session, counterparty_id: str) -> str:
-    """sha256 over the sorted sha256s of the counterparty's framework agreement and amendment documents.
+def fa_version(db: Session, counterparty_id: str) -> Optional[str]:
+    """sha256 over the sorted sha256s of the counterparty's framework agreement and amendment documents, in
+    every tender; None when the counterparty has none.
 
     Adding, removing or changing any of them changes the version."""
     hashes = sorted({sha for (sha,) in db.query(SourceDocumentRecord.sha256).filter(
         SourceDocumentRecord.role == "framework_agreement",
         SourceDocumentRecord.counterparty_id == counterparty_id)})
+    if not hashes:
+        return None
     return hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
 
 
