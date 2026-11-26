@@ -356,13 +356,17 @@ def test_a_citation_only_field_the_offer_does_not_state_is_a_finding():
     assert {c["filename"] for c in finding["citations"]} == {"bid-a.pdf", "fa-a.pdf"}
 
 
-def test_a_citation_only_field_in_conflict_in_the_baseline_is_a_finding():
+def test_several_quoted_clauses_of_a_citation_only_field_in_the_baseline_are_no_conflict():
+    # Ruling R40: never compared (R18), so two different quoted clauses are both kept, not a conflict.
     other = "The price is subject to escalation by the formula P = P0 x (0.5 + 0.5 x I/I0)."
     body = _assess(_manifest(BID_A, FA_A), {"bid-a.pdf": [_ev("bid-a.pdf", "CT-13", ESCALATION)],
                                             "fa-a.pdf": [_ev("fa-a.pdf", "CT-13", ESCALATION, 3),
                                                          _ev("fa-a.pdf", "CT-13", other, 5)]})
-    finding = _by_id(body)["vendor-a|CT-13|fa|escalation_formula"]
-    assert finding["category"] == "fa_conformance" and "a person decides" in finding["message"]
+    assert not any(f["param_id"] == "CT-13" and "a person decides" in f["message"] for f in body["findings"])
+    (term,) = [t for t in body["terms"] if t["vendor_id"] == "vendor-a" and t["param_id"] == "CT-13"]
+    assert term["state"] != "conflict"
+    quoted = term["fa"]["values"]["escalation_formula"]["display"]
+    assert ESCALATION in quoted and other in quoted
 
 
 def test_both_sides_quoting_a_citation_only_clause_is_no_finding():
