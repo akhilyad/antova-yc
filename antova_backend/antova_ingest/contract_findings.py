@@ -40,7 +40,7 @@ from antova_ingest.exposure import Exposure, _euros, _unknown, liability_back_to
 from antova_ingest.findings import Money
 from antova_ingest.ontology import FieldDef
 from antova_ingest.types import Citation, Evidence, ProjectBaseline, TenderManifest
-from antova_ingest.values import PriceRead, _dec_text, citation_only
+from antova_ingest.values import NOT_COMPARABLE, PriceRead, _dec_text, citation_only
 
 EMPTY_BODY = {"terms": [], "checks": [], "gaps": [], "budget": {}, "findings": [], "not_checked": []}
 NO_FA = "no framework agreement provided"
@@ -116,8 +116,8 @@ def _unread(term: ContractTerm, role: str) -> list[str]:
 def _check_finding(check: TermCheck, term: ContractTerm, gap: TermGap | None) -> dict | None:
     param = CONTRACT_PARAMS_BY_ID[check.param_id]
     f = _field(check.param_id, check.field)
-    if check.passed is True or citation_only(f):
-        return None
+    if check.passed is True or (citation_only(f) and check.reason == NOT_COMPARABLE):
+        return None  # a citation-only clause both sides state is compared by hand; any other unknown is shown
     base = _BASELINE_NAME[check.baseline]
     offered_values = term.offered.values if term.offered is not None else {}
     stated = check.field in offered_values
@@ -197,10 +197,12 @@ def _not_checked(vendor_id: str, terms: Sequence[ContractTerm], has_exposure: bo
         entries.append({"vendor_id": vendor_id, "baseline": "fa",
                         "reason": f"the framework agreement was not read ({', '.join(fa_unread)})"})
     owner_unread = list(dict.fromkeys(file for t in terms for file in _unread(t, "owner_contract")))
-    if not any(t.owner is not None for t in terms) and not has_exposure:
-        reason = (f"the owner contract was not read ({', '.join(owner_unread)})" if owner_unread
-                  else OWNER_SILENT if owner_documents else NO_OWNER)
-        entries.append({"vendor_id": vendor_id, "baseline": "owner", "reason": reason})
+    if owner_unread:  # even beside buyer-entered owner terms: what the contract states is unknown
+        entries.append({"vendor_id": vendor_id, "baseline": "owner",
+                        "reason": f"the owner contract was not read ({', '.join(owner_unread)})"})
+    elif not any(t.owner is not None for t in terms) and not has_exposure:
+        entries.append({"vendor_id": vendor_id, "baseline": "owner",
+                        "reason": OWNER_SILENT if owner_documents else NO_OWNER})
     return entries
 
 
@@ -260,7 +262,8 @@ def build_contract_findings(terms: Mapping[tuple[str, str], ContractTerm], check
 
     findings.sort(key=order)
     ids = [f["id"] for f in findings]
-    assert len(ids) == len(set(ids)), f"duplicate finding ids: {ids}"
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"duplicate finding ids: {sorted(i for i in set(ids) if ids.count(i) > 1)}")
     not_checked = [entry for v in vendors for entry in _not_checked(
         v, [t for (vid, _), t in terms.items() if vid == v], any(vid == v for vid, _ in exposed), owner_documents)]
     return findings, not_checked
@@ -283,12 +286,15 @@ def _ld_exposure(term: ContractTerm, project: ProjectBaseline, po_value) -> Term
 
 
 def _liability_exposure(term: ContractTerm, project: ProjectBaseline, po_value) -> TermExposure | None:
-    """The owner liability cap the vendor's cap (a percentage of its order) does not carry. An offer that states
-    its cap as an amount is compared by the check instead."""
+    """The owner liability cap the vendor's cap does not carry. An offer cap as a percentage of its order is put in
+    money with the order value; an offer cap as an amount is compared as it stands. An owner amount against an
+    offer amount is left to the money_cap check (both are amounts)."""
     kind = "back_to_back_liability"
     owner_values = term.owner.values if term.owner is not None else {}
     offered = term.offered.values if term.offered is not None else {}
-    if not {"liability_cap", "liability_cap_money"} & set(owner_values) or "liability_cap_money" in offered:
+    offer_money = offered.get("liability_cap_money")
+    if (not {"liability_cap", "liability_cap_money"} & set(owner_values)
+            or (offer_money is not None and "liability_cap_money" in owner_values)):
         return None
     cited = tuple(dict.fromkeys((*(term.offered.citations if term.offered is not None else ()),
                                  *term.owner.citations)))
@@ -309,6 +315,10 @@ def _liability_exposure(term: ContractTerm, project: ProjectBaseline, po_value) 
     if currency is None:
         return TermExposure(term.vendor_id, term.param_id, _unknown(kind, "the owner liability cap has no currency"),
                             None, cited)
+    if offer_money is not None:
+        return TermExposure(term.vendor_id, term.param_id,
+                            _amount_gap(kind, amount, currency, offer_money, project.fx, steps), offer_money.qualifier,
+                            cited)
     if po_value is not None and po_value[1] != currency:
         converted = fx_convert(amount, currency, po_value[1], project.fx)
         if converted.amount is None:
@@ -323,6 +333,24 @@ def _liability_exposure(term: ContractTerm, project: ProjectBaseline, po_value) 
                                       po_value[0] if po_value is not None else None, currency=currency,
                                       conversions=tuple(steps))
     return TermExposure(term.vendor_id, term.param_id, exposure, currency, cited)
+
+
+def _amount_gap(kind: str, owner_amount: Decimal, currency: str, offer_money, fx, steps: list[str]) -> Exposure:
+    """Owner amount less the offer's cap amount, in the offer's currency, both rounded to the cent first."""
+    to = offer_money.qualifier
+    if to is None:
+        return _unknown(kind, "the offer's liability cap amount has no currency")
+    if to != currency:
+        converted = fx_convert(owner_amount, currency, to, fx)
+        if converted.amount is None:
+            return _unknown(kind, converted.reason)
+        steps.append(f"owner liability cap: {converted.formula}")
+        owner_amount = converted.amount
+    owner, carried = _euros(owner_amount), _euros(Decimal(str(offer_money.value)))
+    gap = max(owner - carried, Decimal("0.00"))
+    formula = "; ".join([*steps, f"gap max(owner cap {_cents(to, owner)} − vendor cap {_cents(to, carried)}, 0) = "
+                                 f"{_cents(to, gap)}"])
+    return Exposure(kind, gap, formula)
 
 
 # --- one tender ----------------------------------------------------------------------------------------------

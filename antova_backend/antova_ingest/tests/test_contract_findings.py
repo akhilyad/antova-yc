@@ -234,7 +234,7 @@ def test_no_frozen_budget_is_a_budget_finding():
 def _two_vendor_case(warranty_offered=WARRANTY_24):
     return _assess(_manifest(BID_A, BID_B, FA_A, project=_owner_project()),
                    {"bid-a.pdf": [_ev("bid-a.pdf", "CT-03", warranty_offered, 4)],
-                    "bid-b.pdf": [_ev("bid-b.pdf", "CT-03", WARRANTY_36, 4)],
+                    "bid-b.pdf": [_ev("bid-b.pdf", "CT-03", "The warranty period is 30 months from delivery.", 4)],
                     "fa-a.pdf": [_ev("fa-a.pdf", "CT-03", WARRANTY_60, 9)]}, prices=PRICE)
 
 
@@ -251,7 +251,8 @@ def test_the_evidence_hash_changes_when_a_cited_value_changes():
     key = "vendor-a|CT-03|fa|warranty_months"
     assert before[key]["evidence_hash"] != after[key]["evidence_hash"]
     other = "vendor-b|CT-03|owner|warranty_months"  # vendor-b's evidence did not change
-    assert other not in before or before[other]["evidence_hash"] == after[other]["evidence_hash"]
+    assert before[other]["category"] == "back_to_back"  # 30 months against the owner's 36
+    assert before[other]["evidence_hash"] == after[other]["evidence_hash"]
 
 
 def test_a_single_offer_call_off_is_assessed_on_its_own():
@@ -339,3 +340,75 @@ def test_a_staged_run_with_a_framework_agreement_raises_its_finding(tmp_path, ex
     # Rerunning from a stored stage reproduces the contracted body.
     again = pipeline.rerun_from("verified", run.artifacts, run.fingerprint)
     assert again.artifacts["contracted"].sha256 == run.artifacts["contracted"].sha256
+
+
+# --- review round 1 -------------------------------------------------------------------------------------------
+
+ESCALATION = "The price is subject to escalation by the formula P = P0 x (0.3 + 0.7 x I/I0)."
+OWNER_LIABILITY_PCT = "The Contractor's total liability is limited to 20% of the Contract Price."
+
+
+def test_a_citation_only_field_the_offer_does_not_state_is_a_finding():
+    body = _assess(_manifest(BID_A, FA_A), {"bid-a.pdf": [_ev("bid-a.pdf", "CT-13", "The price is variable.")],
+                                            "fa-a.pdf": [_ev("fa-a.pdf", "CT-13", ESCALATION)]})
+    finding = _by_id(body)["vendor-a|CT-13|fa|escalation_formula"]
+    assert finding["category"] == "missing"
+    assert {c["filename"] for c in finding["citations"]} == {"bid-a.pdf", "fa-a.pdf"}
+
+
+def test_a_citation_only_field_in_conflict_in_the_baseline_is_a_finding():
+    other = "The price is subject to escalation by the formula P = P0 x (0.5 + 0.5 x I/I0)."
+    body = _assess(_manifest(BID_A, FA_A), {"bid-a.pdf": [_ev("bid-a.pdf", "CT-13", ESCALATION)],
+                                            "fa-a.pdf": [_ev("fa-a.pdf", "CT-13", ESCALATION, 3),
+                                                         _ev("fa-a.pdf", "CT-13", other, 5)]})
+    finding = _by_id(body)["vendor-a|CT-13|fa|escalation_formula"]
+    assert finding["category"] == "fa_conformance" and "a person decides" in finding["message"]
+
+
+def test_both_sides_quoting_a_citation_only_clause_is_no_finding():
+    body = _assess(_manifest(BID_A, FA_A), {"bid-a.pdf": [_ev("bid-a.pdf", "CT-13", ESCALATION)],
+                                            "fa-a.pdf": [_ev("fa-a.pdf", "CT-13", ESCALATION)]})
+    assert "vendor-a|CT-13|fa|escalation_formula" not in _by_id(body)
+
+
+def _owner_value_project(**extra):
+    return ProjectBaseline(owner_terms=OwnerTerms(contract_value=BaselineMoney(amount=D("20000000"), currency="EUR")),
+                           **extra)
+
+
+def test_an_owner_liability_percentage_against_an_offer_amount_is_compared_in_money():
+    body = _assess(_manifest(BID_A, OWNER, project=_owner_value_project()),
+                   {"bid-a.pdf": [_ev("bid-a.pdf", "CT-02", "The Supplier's total liability is limited to EUR 500,000.")],
+                    "owner.pdf": [_ev("owner.pdf", "CT-02", OWNER_LIABILITY_PCT)]}, prices=PRICE)
+    found = [f for f in body["findings"] if f["param_id"] == "CT-02"]
+    assert [f["id"] for f in found] == ["vendor-a|CT-02|owner|back_to_back_liability"]  # never "not stated"
+    (money,) = found[0]["money"]
+    assert (money["amount"], money["currency"]) == ("3500000.00", "EUR")
+    assert "owner liability cap 20% × EUR 20,000,000.00 = EUR 4,000,000.00" in money["formula"]
+
+
+def test_an_owner_liability_percentage_against_an_offer_amount_in_another_currency_is_converted():
+    fx = [{"from_currency": "GBP", "to_currency": "EUR", "rate": "1.25", "dated": "2026-11-01"}]
+    body = _assess(_manifest(BID_A, OWNER, project=_owner_value_project(fx=fx)),
+                   {"bid-a.pdf": [_ev("bid-a.pdf", "CT-02", "The Supplier's total liability is limited to GBP 500,000.")],
+                    "owner.pdf": [_ev("owner.pdf", "CT-02", OWNER_LIABILITY_PCT)]})
+    (money,) = _by_id(body)["vendor-a|CT-02|owner|back_to_back_liability"]["money"]
+    assert (money["amount"], money["currency"]) == ("2700000.00", "GBP")  # EUR 4,000,000 ÷ 1.25 − GBP 500,000
+    assert "÷ 1.25 (2026-11-01, GBP→EUR)" in money["formula"]
+
+
+def test_an_unread_owner_contract_beside_buyer_entered_terms_is_not_checked():
+    project = ProjectBaseline(owner_terms=OwnerTerms(warranty_months=36, warranty_start="delivery"))
+    body = _assess(_manifest(BID_A, OWNER, project=project), {"bid-a.pdf": []})
+    assert {"vendor_id": "vendor-a", "baseline": "owner",
+            "reason": "the owner contract was not read (owner.pdf)"} in body["not_checked"]
+
+
+def test_duplicate_finding_ids_raise(monkeypatch):
+    from antova_ingest import contract_findings
+    from antova_ingest.contract_terms import resolve_contract_terms
+    monkeypatch.setattr(contract_findings, "_missing_finding",
+                        lambda term, required, gap: {"id": "vendor-a|CT-01|offer|term", "vendor_id": term.vendor_id})
+    resolved = resolve_contract_terms(_manifest(BID_A), {"bid-a.pdf": []})
+    with pytest.raises(ValueError, match="duplicate finding ids"):
+        build_contract_findings(resolved, [], {}, [], {})
