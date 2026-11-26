@@ -9,6 +9,7 @@ with the run fingerprint, the rate table version, the contract-ontology hash and
 from __future__ import annotations
 
 import io
+import re
 from typing import Iterable
 from xml.sax.saxutils import escape
 
@@ -28,6 +29,14 @@ APPENDIX = "11. Evidence appendix"
 RISK_TITLES = {"technical": "Technical", "fa_conformance": "Framework agreement conformance",
                "back_to_back": "Back-to-back", "budget": "Budget", "missing": "Missing"}
 TITLE = "Contract approval sheet"
+BASELINES = {"fa": "framework agreement", "owner": "owner contract", "offer": "offer", "budget": "budget",
+             "tbe": "material requisition"}
+_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def clean(value) -> str:
+    """The text without the control characters XML cannot hold (PDF text carries form feeds and NULs)."""
+    return _ILLEGAL.sub("", "" if value is None else str(value))
 
 
 def watermark(cas: dict) -> str:
@@ -42,8 +51,8 @@ def footer(cas: dict) -> str:
 
 
 def _cite(c: dict) -> str:
-    page = c.get("page")
-    return f"{c.get('filename')}, p. {page}" if page is not None else str(c.get("filename"))
+    page, name = c.get("page"), c.get("filename") or "unknown file"
+    return f"{name}, p. {page}" if page is not None else name
 
 
 def _field_lines(field: dict) -> tuple[str, str]:
@@ -60,6 +69,25 @@ def _field_lines(field: dict) -> tuple[str, str]:
     return field.get("label") or "", text
 
 
+def _risk_detail(r: dict) -> str:
+    """The baseline, money and days of a risk line (spec 4.5 item 8), when the finding has them."""
+    parts = []
+    segments = str(r.get("finding_id") or "").split("|")
+    baseline = BASELINES.get(segments[1] if len(segments) > 1 and segments[1] == "budget" else
+                             segments[2] if len(segments) > 2 else "")
+    if baseline:
+        parts.append(f"baseline: {baseline}")
+    for m in r.get("money") or []:
+        amount = m.get("amount")
+        parts.append(f"{m.get('kind') or 'amount'}: {amount} {m.get('currency') or ''}".rstrip()
+                     if amount is not None else f"{m.get('kind') or 'amount'}: not known ({m.get('reason')})")
+    gap = r.get("gap")
+    if gap:
+        parts.append(f"gap: {gap['value']} {gap.get('unit') or ''}".rstrip() if gap.get("value") is not None
+                     else f"gap: not known ({gap.get('reason')})")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
 def _section_rows(key: str, section) -> list[tuple[str, str]]:
     """Rows of (label, text) of a section."""
     if key == "risks":
@@ -69,7 +97,8 @@ def _section_rows(key: str, section) -> list[tuple[str, str]]:
                 decision = r.get("disposition") or r.get("disposition_state") or "undecided"
                 cites = "; ".join(_cite(c) for c in r.get("citations") or [])
                 rows.append((RISK_TITLES.get(group, group),
-                             f"{r['message']} — decision: {decision}" + (f" [{cites}]" if cites else "")))
+                             f"{r['message']}{_risk_detail(r)} — decision: {decision}"
+                             + (f" [{cites}]" if cites else "")))
         return rows or [("Risks", "none")]
     if key == "approvers":
         rows = [(a["role"], a["reason"]) for a in section.get("suggested") or []]
@@ -120,13 +149,13 @@ def cas_docx(cas: dict, *, draft: bool) -> bytes:
 
     doc = Document()
     section = doc.sections[0]
-    section.footer.paragraphs[0].text = footer(cas)
+    section.footer.paragraphs[0].text = clean(footer(cas))
     if draft:
-        section.header.paragraphs[0].text = watermark(cas)
+        section.header.paragraphs[0].text = clean(watermark(cas))
     doc.add_heading(TITLE, level=0)
     if draft:
-        doc.add_paragraph(watermark(cas))
-    doc.add_paragraph(_review_state(cas))
+        doc.add_paragraph(clean(watermark(cas)))
+    doc.add_paragraph(clean(_review_state(cas)))
     for key, title in SECTIONS:
         doc.add_heading(title, level=1)
         rows = _section_rows(key, cas.get(key) or {})
@@ -134,11 +163,11 @@ def cas_docx(cas: dict, *, draft: bool) -> bytes:
         table.style = "Table Grid"
         for label, text in rows:
             cells = table.add_row().cells
-            cells[0].text, cells[1].text = label, text
+            cells[0].text, cells[1].text = clean(label), clean(text)
     doc.add_heading(APPENDIX, level=1)
     for c in evidence(cas):
-        doc.add_paragraph(_cite(c), style="List Bullet")
-        doc.add_paragraph(f"“{c.get('quote') or ''}”")
+        doc.add_paragraph(clean(_cite(c)), style="List Bullet")
+        doc.add_paragraph(clean(f"“{c.get('quote') or ''}”"))
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
@@ -155,7 +184,7 @@ def cas_pdf(cas: dict, *, draft: bool) -> bytes:
 
     styles = getSampleStyleSheet()
     cell = styles["BodyText"]
-    foot, mark = footer(cas), watermark(cas) if draft else None
+    foot, mark = clean(footer(cas)), clean(watermark(cas)) if draft else None
 
     def on_page(canvas, doc):
         canvas.saveState()
@@ -172,7 +201,7 @@ def cas_pdf(cas: dict, *, draft: bool) -> bytes:
         canvas.restoreState()
 
     def p(text: str, style=cell):
-        return Paragraph(escape(text), style)
+        return Paragraph(escape(clean(text)), style)
 
     story = [p(TITLE, styles["Title"])]
     if mark:

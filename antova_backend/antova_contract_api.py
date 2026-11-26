@@ -351,7 +351,7 @@ def _cas_export(db: Session, tender_id: str, vendor_id: str, draft: bool, ext: s
                      if ext == "docx" else (antova_cas_export.cas_pdf, "application/pdf"))
     name = f"CAS_{tender_id}_{vendor_id}{'_DRAFT' if draft else ''}.{ext}"
     return Response(content=render(cas, draft=draft), media_type=media, headers={
-        "Content-Disposition": f"attachment; filename={name}", "Cache-Control": "no-store"})
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
 @router.get("/tenders/{tender_id}/vendors/{vendor_id}/cas.docx", dependencies=[Depends(_known_vendor)])
