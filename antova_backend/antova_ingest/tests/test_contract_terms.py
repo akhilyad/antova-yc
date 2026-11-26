@@ -583,3 +583,33 @@ def test_a_term_marked_manual_is_missing_with_its_reason(monkeypatch):
     assert [(f["code"], f["message"]) for f in term.flags] == [("manual_term", MANUAL_REASON)]
     assert MANUAL_REASON == "not reliably found; check by hand"
     assert terms[("vendor-a", "CT-03")].state == "cited"  # other terms are read as before
+
+
+def test_several_quoted_escalation_clauses_in_one_source_are_not_a_conflict():
+    """Ruling R40: a citation-only field (R18) is never compared, so two different price-basis sentences in one
+    framework agreement are both quoted, not a conflict; the comparable fields alone decide a conflict."""
+    fixed = "The price is fixed and firm from the issue of the Notice to Proceed."
+    lump = "The Contract Price is a fixed lump sum."
+    a, b = _ev("fa-a.pdf", "CT-13", 4, fixed), _ev("fa-a.pdf", "CT-13", 4, lump)
+    terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [a, b]})
+    term = terms[("vendor-a", "CT-13")]
+    assert term.state != "conflict" and term.flags == ()
+    assert term.fa.values["price_fixed_after_ntp"].display == "fixed after NTP"
+    assert term.fa.values["price_type"].display == "fixed lump sum"
+    escalation = term.fa.values["escalation_formula"]
+    assert fixed in escalation.display and lump in escalation.display
+    assert {a.citation, b.citation} <= set(term.fa.citations)
+
+
+def test_a_manual_term_keeps_its_contract_cell_open_until_reviewed():
+    from antova_review import contract_cell_state, contract_open_items
+    from antova_ingest.contract_ontology import MANUAL_REASON
+
+    term = {"param_id": "CT-09", "vendor_id": "vendor-a", "state": "missing", "evidence_hash": "h1",
+            "flags": [{"code": "manual_term", "message": MANUAL_REASON}]}
+    assert contract_cell_state(term, None) == "open"
+    items = contract_open_items([term], [], [], {}, None, None)
+    assert [(i.kind, i.param_id) for i in items] == [("contract_cell", "CT-09")]
+    review = {"evidence_hash": "h1", "action": "approve"}
+    assert contract_cell_state(term, review) == "reviewed"
+    assert contract_open_items([term], [], [], {("CT-09", "vendor-a"): review}, None, None) == []

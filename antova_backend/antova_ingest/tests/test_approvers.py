@@ -123,3 +123,13 @@ def test_bad_rule_name_and_missing_file():
 def test_suggestion_shape():
     s = _suggest()[0]
     assert isinstance(s, Suggestion) and isinstance(RULES, ApproverRules)
+
+
+def test_a_back_to_back_liability_exposure_over_the_threshold_brings_in_the_director():
+    # The shape contract_findings gives a CT-02 back-to-back liability gap: an exposure in the vendor's currency.
+    finding = {**_finding(param_id="CT-02", amounts=["40625641.03"], currency="GBP"),
+               "id": "V1|CT-02|owner|back_to_back_liability"}
+    finding["money"][0]["kind"] = "back_to_back_liability"
+    got = _suggest([finding], fx=[GBP_EUR])
+    assert "business_director" in _roles(got) and "legal" in _roles(got)
+    assert _reason(got, "business_director").startswith("A finding carries GBP 40625641.03")

@@ -498,7 +498,12 @@
         {
           "param_id": "CT-13",
           "page": 4,
-          "quote": "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
+          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is a fixed lump sum."
         },
         {
           "param_id": "CT-07",
@@ -631,7 +636,12 @@
         {
           "param_id": "CT-13",
           "page": 4,
-          "quote": "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
+          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is a fixed lump sum."
         },
         {
           "param_id": "CT-07",
@@ -903,7 +913,8 @@
         "page": 4,
         "quotes": [
           "The Contract Price is in EUR.",
-          "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
+          "The price is fixed and firm from the issue of the Notice to Proceed.",
+          "The Contract Price is a fixed lump sum."
         ],
         "values": {
           "price_currency": "EUR",
@@ -1070,7 +1081,8 @@
         "page": 4,
         "quotes": [
           "The Contract Price is in EUR.",
-          "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."
+          "The price is fixed and firm from the issue of the Notice to Proceed.",
+          "The Contract Price is a fixed lump sum."
         ],
         "values": {
           "price_currency": "EUR",

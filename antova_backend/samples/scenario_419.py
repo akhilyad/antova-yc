@@ -92,9 +92,8 @@ def _fa(key: str, *, liability: str, warranty_months: int, insurer: str) -> list
         (3, "CT-10", "The Buyer may issue the NTP within 8 months from the Project Purchase Order."),
         (3, "CT-01", _LD_RATE), (3, "CT-01", _LD_CAP_10), (3, "CT-01", _LD_TRIGGERS),
         (4, "CT-13", "The Contract Price is in EUR."),
-        # One sentence for both: each price-basis sentence is also captured as the (citation-only) escalation
-        # clause, and two different ones would be a conflict.
-        (4, "CT-13", "The Contract Price is a fixed lump sum, fixed and firm from the issue of the Notice to Proceed."),
+        (4, "CT-13", "The price is fixed and firm from the issue of the Notice to Proceed."),
+        (4, "CT-13", "The Contract Price is a fixed lump sum."),
         (4, "CT-07", "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."),
         (4, "CT-06", "The advance payment is made against an advance payment bond of 10%."),
         (5, "CT-04", "The Supplier provides a warranty bond of 5% of the Contract Price."),

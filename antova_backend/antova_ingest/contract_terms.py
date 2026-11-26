@@ -38,7 +38,7 @@ from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS
 from antova_ingest.ontology import ParameterDef
 from antova_ingest.precedence import _tier, add_flag, flag
 from antova_ingest.types import Citation, DocumentEntry, Evidence, FieldValue, OwnerTerms, TenderManifest
-from antova_ingest.values import EVENT_LABELS, NO_LD, _dec_text, _warranty_basis, parse_field
+from antova_ingest.values import CITATION_ONLY, EVENT_LABELS, NO_LD, _dec_text, _warranty_basis, parse_field
 
 State = Literal["cited", "inherited", "missing", "conflict"]
 
@@ -122,11 +122,24 @@ def _layer(param: ParameterDef, passages: list[Evidence]) -> dict[str, _Slot]:
         if len(distinct) == 1:
             slots[f.name] = _Slot(distinct[0].values[f.name], [distinct[0].citation])
             continue
+        if f.name in CITATION_ONLY:
+            # Ruling R40: a citation-only field is never compared (R18), so several quoted clauses are not a
+            # conflict: every clause is kept, quoted and cited; the comparable fields decide a conflict.
+            slots[f.name] = _Slot(_quoted_together([d.values[f.name] for d in distinct]),
+                                  [e.citation for e in distinct])
+            continue
         said = "; ".join(f"{_where(e.citation)} says {e.values[f.name].display}" for e in distinct)
         slots[f.name] = _Slot(None, [e.citation for e in distinct], [_field_flag(
             "passages_disagree",
             f"{param.id} {f.label}: {said}. Neither outranks the other, so a person decides which governs.", f.name)])
     return slots
+
+
+def _quoted_together(values: list[FieldValue]) -> FieldValue:
+    """Several quoted clauses of a citation-only field as one value, in page order."""
+    text = " / ".join(v.display for v in values)
+    first = values[0]
+    return FieldValue(first.kind, text if isinstance(first.value, str) else first.value, text, first.qualifier)
 
 
 def _override(state: dict[str, _Slot], layer: dict[str, _Slot]) -> None:
@@ -145,6 +158,9 @@ def _unordered(state: dict[str, _Slot], layer: dict[str, _Slot], param: Paramete
             state[name] = new  # nothing else states it: the order does not matter
         elif not prior.conflicts and not new.conflicts and _same(prior.value, new.value):
             prior.citations.extend(new.citations)
+        elif name in CITATION_ONLY and not prior.conflicts and not new.conflicts:
+            # Never compared (R18, R40): both clauses are quoted, whatever their order.
+            state[name] = _Slot(_quoted_together([prior.value, new.value]), prior.citations + new.citations)
         else:
             state[name] = _Slot(None, prior.citations + new.citations, [*prior.conflicts, *new.conflicts, _field_flag(
                 "amendment_order_unknown",
