@@ -222,3 +222,54 @@ def test_removing_a_role_not_suggested_is_refused(client):
 def test_cas_routes_need_the_review_token(client):
     assert client.get(CAS).status_code == 401
     assert client.put(f"{CAS}/approvers/business_director", json={"removed": True, "reason": "r"}).status_code == 401
+
+
+# --- delivery: lead time and schedule float (ruling R38) ------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from antova_cas import _delivery, _Terms  # noqa: E402
+
+PACK_418 = Path(__file__).resolve().parent / "samples" / "TENDER-2026-418"
+DATES = {"po_award_date": {"value": "2027-01-15"}, "required_on_site_date": {"value": "2027-12-01"}}
+DAP = "Prices are quoted DAP site, Velmar substation."
+
+
+@pytest.fixture(scope="module")
+def tender_418():
+    expected = json.loads((PACK_418 / "expected.json").read_text(encoding="utf-8"))
+    return run_ingest(PACK_418, locator=AnswerKeyLocator(expected), expected_tender_id="TENDER-2026-418").tender
+
+
+def _loaded(tender, project, incoterm_quote=DAP):
+    tender = tender.model_copy(deep=True, update={"project": project})
+    cell = next(p for p in tender.parameters if p.id == "PARAM-06").vendors["vendor-b"]
+    cell.field_citations = {**cell.field_citations, "incoterm": {**cell.field_citations["incoterm"],
+                                                                 "quote": incoterm_quote}}
+    return SimpleNamespace(tender=tender, documents=[])
+
+
+def test_lead_time_is_cited_from_the_tbe_cell(tender_418):
+    field = _delivery(_loaded(tender_418, DATES), "vendor-b", _Terms([], []))["lead_time"]
+    assert (field["state"], field["display"]) == ("cited", "44 weeks")
+    assert [(c["filename"], c["page"]) for c in field["citations"]] == [("Bid_vendor-b_VoltSwitch.pdf", 21)]
+
+
+def test_schedule_float_is_computed_with_the_project_dates(tender_418):
+    field = _delivery(_loaded(tender_418, DATES), "vendor-b", _Terms([], []))["schedule_float"]
+    # 2027-01-15 + 44 weeks (308 days) = 2027-11-19; 2027-12-01 − 2027-11-19 = +12 days.
+    assert (field["state"], field["display"]) == ("computed", "+12 days")
+    assert "PO award 2027-01-15" in field["formula"] and "float +12 days" in field["formula"]
+
+
+def test_schedule_float_is_missing_without_a_required_on_site_date(tender_418):
+    project = {"po_award_date": DATES["po_award_date"]}
+    field = _delivery(_loaded(tender_418, project), "vendor-b", _Terms([], []))["schedule_float"]
+    assert field["state"] == "missing" and field["display"] != "0"
+    assert field["reason"] == "the project has no required on-site date"
+
+
+def test_no_lead_time_cell_is_missing(cas):
+    assert cas["delivery"]["lead_time"]["state"] == "missing"  # TENDER-2026-402 has no PARAM-09
+    assert cas["delivery"]["schedule_float"]["reason"] == "no lead time to schedule from"

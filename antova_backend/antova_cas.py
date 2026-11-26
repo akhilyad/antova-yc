@@ -23,7 +23,9 @@ from antova_ingest import approvers as approver_rules
 from antova_ingest.contract_checks import _cents
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
 from antova_ingest.types import ProjectBaseline
-from antova_ingest.values import CITATION_ONLY
+from antova_ingest import schedule
+from antova_ingest.ontology import EXTENDED_PARAMETERS, PARAMS_BY_ID
+from antova_ingest.values import CITATION_ONLY, parse_field
 from antova_review import open_items, review_state
 
 CAS_KEYS = ("project", "law", "price", "delivery", "payment_bonds", "lds", "warranty", "risks", "technical",
@@ -227,6 +229,45 @@ def _warranty(body: dict, vendor_id: str, terms: _Terms) -> dict:
             **terms.fields("CT-04", prefix="bond_")}
 
 
+LEAD_TIME_PARAM = "PARAM-09"
+INCOTERM_PARAM = "PARAM-06"
+
+
+def _cell_field(loaded, param_id: str, vendor_id: str, name: str):
+    """(the TBE cell's FieldValue for `name`, its citation), read from the cell's stored field citation with the
+    same parser the TBE used; (None, None) when the tender has no such cell or field."""
+    param = next((p for p in loaded.tender.parameters if p.id == param_id), None)
+    cell = param.vendors.get(vendor_id) if param is not None else None
+    citation = (cell.field_citations or {}).get(name) if cell is not None else None
+    if not citation:
+        return None, None
+    definition = {p.id: p for p in (*PARAMS_BY_ID.values(), *EXTENDED_PARAMETERS)}[param_id]
+    kind = next(f.kind for f in definition.fields if f.name == name)
+    return parse_field(kind, citation["quote"], name), citation
+
+
+def _delivery(loaded, vendor_id: str, terms: "_Terms") -> dict:
+    """CT-12, the lead time from the TBE cell (PARAM-09) and the schedule float (schedule.schedule_float), with the
+    inputs the TBE uses for it: the tender's project dates and the TBE's Incoterm (PARAM-06)."""
+    lead, lead_citation = _cell_field(loaded, LEAD_TIME_PARAM, vendor_id, "lead_time")
+    if lead is None:
+        lead_field = _missing("Lead time", "the TBE has no delivery lead time for this vendor (PARAM-09)")
+    else:
+        lead_field = _field("Lead time", "cited", lead.display, citations=[lead_citation])
+    if lead is None:
+        float_field = _missing("Schedule float", "no lead time to schedule from")
+    else:
+        incoterm, _ = _cell_field(loaded, INCOTERM_PARAM, vendor_id, "incoterm")
+        basis = schedule.arrival_basis_for_incoterm(incoterm.value if incoterm is not None else None)
+        result = schedule.schedule_float(loaded.tender.project, lead, arrival_basis=basis)
+        if result.float_days is None:
+            float_field = _missing("Schedule float", result.reason, [lead_citation])
+        else:
+            float_field = _field("Schedule float", "computed", f"{result.float_days:+d} days",
+                                 citations=[lead_citation], formula="; ".join(result.steps))
+    return {**terms.fields("CT-12"), "lead_time": lead_field, "schedule_float": float_field}
+
+
 def _vendor_cells(loaded, vendor_id: str):
     for param in loaded.tender.parameters:
         cell = param.vendors.get(vendor_id)
@@ -344,7 +385,7 @@ def build_cas(loaded, vendor_id: str, *, contract: dict, dispositions: dict, rul
         "project": _project(loaded, contract, project, terms),
         "law": _law(terms),
         "price": _price(loaded, vendor_id, body, project, terms),
-        "delivery": terms.fields("CT-12"),
+        "delivery": _delivery(loaded, vendor_id, terms),
         "payment_bonds": _payment_bonds(body, vendor_id, terms),
         "lds": _lds(findings, vendor_id, terms),
         "warranty": _warranty(body, vendor_id, terms),
