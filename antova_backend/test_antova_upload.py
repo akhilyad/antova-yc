@@ -270,3 +270,20 @@ def test_only_the_founder_may_mark_a_manifest_synthetic(client, root, monkeypatc
     real = {**_manifest(), "synthetic": False}
     assert client.put(url, content=json.dumps(real), headers=pia).status_code == 200
     assert client.put(url, content=json.dumps({**_manifest(), "synthetic": True})).status_code == 200  # founder
+
+
+@pytest.mark.parametrize("value", [1, "true", "yes"])
+def test_a_truthy_synthetic_value_is_not_a_way_around_the_founder_check(client, root, monkeypatch, value):
+    monkeypatch.setenv("ANTOVA_REVIEWERS", json.dumps(
+        {"pia": {"name": "Pia Procura", "token": "tok-pia", "roles": ["project_management"]}}))
+    _upload_all(client)
+    url = f"/api/review/tenders/{TENDER_ID}/manifest"
+    body = json.dumps({**_manifest(), "synthetic": value})
+    assert client.put(url, content=body, headers={REVIEW_HEADER: "tok-pia"}).status_code == 403
+    founder = client.put(url, content=body)  # not a bool: refused for everyone, with the field named
+    assert founder.status_code == 422 and "synthetic" in founder.json()["detail"]
+    assert not (root / TENDER_ID / "manifest.json").exists()
+    # A stored manifest with a truthy non-bool (written before the strict check) still guards its files.
+    (root / TENDER_ID / "manifest.json").write_text(body, encoding="utf-8")
+    refused = client.put(_url(SMALL), content=_pdf(), headers={**PDF, REVIEW_HEADER: "tok-pia"})
+    assert refused.status_code == 403

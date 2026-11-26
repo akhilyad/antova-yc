@@ -135,9 +135,10 @@ def _synthetic_founder_only(folder: Path, principal: ReviewerPrincipal) -> None:
         return
     stored = folder / "manifest.json"
     try:
-        synthetic = stored.is_file() and json.loads(stored.read_text(encoding="utf-8")).get("synthetic") is True
+        # Any truthy value counts: the stored file may predate the strict check.
+        synthetic = stored.is_file() and bool(json.loads(stored.read_text(encoding="utf-8")).get("synthetic"))
     except (ValueError, OSError, AttributeError):
-        synthetic = False
+        synthetic = stored.is_file()  # unreadable: refuse rather than guess
     if synthetic:
         raise _bad(403, SYNTHETIC_FOUNDER_ONLY)
 
@@ -193,7 +194,7 @@ async def put_manifest(tender_id: str, request: Request, db: Session = Depends(g
     except UnicodeDecodeError:
         raise _bad(422, "The manifest must be UTF-8 JSON") from None
     try:
-        claims_synthetic = json.loads(text).get("synthetic") is True
+        claims_synthetic = bool(json.loads(text).get("synthetic"))
     except (ValueError, AttributeError):
         claims_synthetic = False  # parse_manifest reports the fault
     if claims_synthetic and principal.id != FOUNDER_ID:
@@ -207,6 +208,8 @@ async def put_manifest(tender_id: str, request: Request, db: Session = Depends(g
         raise _bad(422, str(exc)) from None
     if manifest.tender_id != tender_id:
         raise _bad(422, f"The manifest names tender {manifest.tender_id!r}, not {tender_id!r}")
+    if manifest.synthetic and principal.id != FOUNDER_ID:  # the parsed value, as the ingest will read it
+        raise _bad(403, SYNTHETIC_FOUNDER_ONLY)
     temp = folder / f".manifest-{secrets.token_hex(6)}.tmp"
     try:
         temp.write_text(text, encoding="utf-8")

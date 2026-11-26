@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    StrictBool,
     BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_serializer, model_validator,
 )
 
@@ -211,7 +212,7 @@ class TenderManifest(BaseModel):
     rate_table: str
     documents: list[DocumentEntry]
     engineering_estimates: dict[str, Decimal]
-    synthetic: bool = False
+    synthetic: StrictBool = False  # true or false only: it switches off the zero-retention guard (R24)
     project: ProjectBaseline | None = None
 
     @model_validator(mode="after")

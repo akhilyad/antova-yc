@@ -258,7 +258,10 @@ def purge_expired(db: Session, now: datetime) -> list[str]:
     except Exception:
         db.rollback()
         for folder, tombstone in tombstones:  # the rows stay, so the folders do too
-            tombstone.rename(folder)
+            try:
+                tombstone.rename(folder)
+            except OSError:
+                log.error("retention purge: could not restore %s from %s", folder.name, tombstone.name)
         raise
     if root is not None and root.is_dir():
         _sweep(root, db, cutoff)
