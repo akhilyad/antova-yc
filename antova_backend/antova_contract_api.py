@@ -24,13 +24,14 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, StringConstraints, model_validator
 from sqlalchemy.orm import Session
 
 from antova_auth import ROLES, ReviewerPrincipal, require_review_token
 from antova_briefs_api import not_found
 import antova_cas
+import antova_cas_export
 from antova_db import (ApproverRemovalRecord, ContractGateRecord, CounterpartyRecord, FindingDispositionRecord,
                        ProjectRecord, TenderRecord, TenderRepository, fa_version, get_db)
 from antova_ingest import approvers
@@ -40,6 +41,10 @@ from antova_review import contract_cell_state, contract_open_items
 log = logging.getLogger(__name__)
 DISPOSITIONS_LOCKED = "Reopen the contract review before you change dispositions."
 CONTRACT_LOCKED = "Reopen the contract review before you change it."
+TBE_NOT_VERIFIED = "Sign off the technical evaluation before you download the approval sheet."
+GATE_NOT_VERIFIED = "Sign off this vendor's contract terms before you download the approval sheet."
+FA_CHANGED = ("The framework agreement for this vendor changed after sign-off. "
+              "Withdraw and sign off again before you download the approval sheet.")
 
 router = APIRouter(prefix="/api/review", tags=["Contract review"], dependencies=[Depends(require_review_token)])
 
@@ -313,10 +318,52 @@ def _cas_inputs(db: Session, tender_id: str, vendor_id: str):
 @router.get("/tenders/{tender_id}/vendors/{vendor_id}/cas", dependencies=[Depends(_known_vendor)])
 def get_cas(tender_id: str, vendor_id: str, db: Session = Depends(get_db)):
     """The vendor's contract approval sheet, assembled in code from what is stored."""
+    return _build_cas(db, tender_id, vendor_id)
+
+
+def _build_cas(db: Session, tender_id: str, vendor_id: str) -> dict:
     loaded, contract = _cas_inputs(db, tender_id, vendor_id)
     dispositions = {row["finding_id"]: row for row in latest_dispositions(db, tender_id, vendor_id)}
     return antova_cas.build_cas(loaded, vendor_id, contract=contract, dispositions=dispositions,
                                 rules=approvers.load_rules(), removals=_removals(db, tender_id, vendor_id))
+
+
+def _export_allowed(db: Session, tender_id: str, vendor_id: str) -> None:
+    """A final export needs the TBE and the vendor's gate VERIFIED, and the FA unchanged since the gate's
+    fa_version (R3: a later FA change does not reopen a VERIFIED gate, so it is checked here)."""
+    gate = _gate(db, tender_id, vendor_id)
+    repo = TenderRepository(db)
+    if repo.get_meta(tender_id).status != "VERIFIED":
+        raise HTTPException(status_code=409, detail=TBE_NOT_VERIFIED)
+    if gate.status != "VERIFIED":
+        raise HTTPException(status_code=409, detail=GATE_NOT_VERIFIED)
+    counterparty = repo.vendor_counterparty(tender_id, vendor_id)
+    if (fa_version(db, counterparty) if counterparty else None) != gate.fa_version:
+        raise HTTPException(status_code=409, detail=FA_CHANGED)
+
+
+def _cas_export(db: Session, tender_id: str, vendor_id: str, draft: bool, ext: str) -> Response:
+    if not draft:
+        _export_allowed(db, tender_id, vendor_id)
+    cas = _build_cas(db, tender_id, vendor_id)
+    render, media = ((antova_cas_export.cas_docx,
+                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                     if ext == "docx" else (antova_cas_export.cas_pdf, "application/pdf"))
+    name = f"CAS_{tender_id}_{vendor_id}{'_DRAFT' if draft else ''}.{ext}"
+    return Response(content=render(cas, draft=draft), media_type=media, headers={
+        "Content-Disposition": f"attachment; filename={name}", "Cache-Control": "no-store"})
+
+
+@router.get("/tenders/{tender_id}/vendors/{vendor_id}/cas.docx", dependencies=[Depends(_known_vendor)])
+def cas_docx(tender_id: str, vendor_id: str, draft: bool = False, db: Session = Depends(get_db)):
+    """The CAS as DOCX. Without `draft`, only once the TBE and the vendor's gate are signed off."""
+    return _cas_export(db, tender_id, vendor_id, draft, "docx")
+
+
+@router.get("/tenders/{tender_id}/vendors/{vendor_id}/cas.pdf", dependencies=[Depends(_known_vendor)])
+def cas_pdf(tender_id: str, vendor_id: str, draft: bool = False, db: Session = Depends(get_db)):
+    """The CAS as PDF. Without `draft`, only once the TBE and the vendor's gate are signed off."""
+    return _cas_export(db, tender_id, vendor_id, draft, "pdf")
 
 
 @router.put("/tenders/{tender_id}/vendors/{vendor_id}/cas/approvers/{role}", dependencies=[Depends(_known_vendor)])
