@@ -248,3 +248,127 @@ def test_public_brief_contract_categories_match_the_approver_rules():
     from antova_review import _CONTRACT_FINDING_CATEGORIES
 
     assert set(_CONTRACT_FINDING_CATEGORIES) == set(CATEGORIES)
+
+
+# --- review round 1 ---------------------------------------------------------------------------------
+
+def test_deletion_takes_the_documents_out_of_the_manifest(seeded):
+    """R39: a re-ingest after the deletion reads a manifest without the deleted documents."""
+    manifest = {"tender_id": T1, "documents": [{"file": "MR.pdf", "role": "mr_spec"},
+                                               {"file": "FA_Kestrel.pdf", "role": "framework_agreement",
+                                                "counterparty_id": CP},
+                                               {"file": "FA_Osprey.pdf", "role": "framework_agreement",
+                                                "counterparty_id": OTHER_CP}]}
+    (seeded / T1 / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert TestClient(app).delete(f"/api/review/counterparties/{CP}", headers=FOUNDER).status_code == 200
+    kept = json.loads((seeded / T1 / "manifest.json").read_text(encoding="utf-8"))
+    assert [d["file"] for d in kept["documents"]] == ["MR.pdf", "FA_Osprey.pdf"]
+    assert kept["tender_id"] == T1
+
+
+def test_public_brief_from_a_tender_with_an_fa_names_no_contract_file(tmp_path):
+    from antova_briefs_api import get_brief
+    from antova_ingest.tests.test_db import DOCS, _tender as tbe_tender
+    from antova_service import persist
+    from test_antova_contract_db import BID, CONTRACTED, FA, _result
+
+    bind = create_engine(f"sqlite:///{(tmp_path / 'b.db').as_posix()}")
+    init_db(bind)
+    result = _result(tbe_tender(), [*DOCS[:1], BID, FA], CONTRACTED)
+    result.stats.update({
+        "locales": {FA.filename: "en", BID.filename: "en"},
+        "no_text_pages": {FA.filename: [3], BID.filename: [4]},
+        "stage_log": [{"stage": "Parse", "pct": 20, "t_ms": 1}, {"stage": "Read contract terms", "pct": 95, "t_ms": 2}],
+    })
+    result = __import__("dataclasses").replace(result, warnings=[f"{FA.filename}: not read.", "b.pdf: page 4 has no text"])
+    with Session(bind) as db:
+        persist(result, db)
+        tender = db.query(TenderRecord).one()
+        tender.status, tender.verified_at = "VERIFIED", NOW.replace(tzinfo=None)
+        stats = json.loads(tender.ingest_stats)
+        stats.update(result.stats)
+        stats["warnings"] = result.warnings
+        tender.ingest_stats = json.dumps(stats)
+        tender.stage_log = json.dumps(result.stats["stage_log"])
+        db.commit()
+        body = json.loads(json.dumps(get_brief(tender.share_id, db), default=str))
+    text = json.dumps(body)
+    assert FA.filename not in text and "framework_agreement" not in text
+    assert body["ingest_stats"]["locales"] == {BID.filename: "en"}
+    assert body["ingest_stats"]["no_text_pages"] == {BID.filename: [4]}
+    assert [s["stage"] for s in body["stage_log"]] == ["Parse"]
+
+
+def test_a_reviewer_cannot_put_files_into_a_synthetic_tender(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTOVA_TENDERS_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTOVA_REVIEWERS", json.dumps(REVIEWERS))
+    folder = tmp_path / "TENDER-2026-977"
+    _write(folder / "manifest.json", json.dumps({"tender_id": "TENDER-2026-977", "synthetic": True}).encode())
+    pdf = (__import__("antova_ingest.tests.fakes", fromlist=["PACK"]).PACK / "Bid_vendor-a_Nordwerk.pdf").read_bytes()
+    url = "/api/review/tenders/TENDER-2026-977/files/Real_contract.pdf"
+    client = TestClient(app)
+    refused = client.put(url, content=pdf, headers={REVIEW_HEADER: "tok-pm", "Content-Type": "application/pdf"})
+    assert refused.status_code == 403 and not (folder / "Real_contract.pdf").exists()
+    assert client.put(url, content=pdf, headers={**FOUNDER, "Content-Type": "application/pdf"}).status_code == 201
+
+
+def test_a_refused_synthetic_manifest_creates_no_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTOVA_TENDERS_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTOVA_REVIEWERS", json.dumps(REVIEWERS))
+    response = TestClient(app).put("/api/review/tenders/TENDER-2026-978/manifest",
+                                   content=json.dumps({"tender_id": "TENDER-2026-978", "synthetic": True}),
+                                   headers={REVIEW_HEADER: "tok-pm"})
+    assert response.status_code == 403 and not (tmp_path / "TENDER-2026-978").exists()
+
+
+def test_a_failed_folder_removal_is_swept_by_the_next_purge(own_db, monkeypatch):
+    bind, root = own_db
+    monkeypatch.setenv("ANTOVA_RETENTION_DAYS", "30")
+    real_rmtree = retention.shutil.rmtree
+
+    def failing(path, *a, **k):
+        raise OSError("disk busy")
+
+    monkeypatch.setattr(retention.shutil, "rmtree", failing)
+    with Session(bind) as db:
+        assert retention.purge_expired(db, NOW) == ["TENDER-2026-931"]
+        assert db.get(TenderRecord, "TENDER-2026-931") is None
+    leftovers = [p.name for p in root.iterdir()]
+    assert "TENDER-2026-931" not in leftovers
+    assert any(n.startswith(retention.TOMBSTONE_PREFIX) for n in leftovers)  # kept, to sweep later
+    monkeypatch.setattr(retention.shutil, "rmtree", real_rmtree)
+    with Session(bind) as db:
+        assert retention.purge_expired(db, NOW) == []
+    assert sorted(p.name for p in root.iterdir()) == ["TENDER-2026-929"]
+
+
+def test_an_old_folder_without_a_tender_row_is_swept_a_new_one_kept(own_db, monkeypatch):
+    import os
+    bind, root = own_db
+    monkeypatch.setenv("ANTOVA_RETENTION_DAYS", "30")
+    old, new = root / "TENDER-2026-950", root / "TENDER-2026-951"
+    _write(old / "x.pdf", b"%PDF-1.4")
+    _write(new / "x.pdf", b"%PDF-1.4")  # an upload not yet ingested
+    stamp = (NOW - timedelta(days=40)).timestamp()
+    os.utime(old, (stamp, stamp))
+    with Session(bind) as db:
+        retention.purge_expired(db, datetime.now(timezone.utc))
+    assert not old.exists() and new.is_dir()
+
+
+@pytest.mark.parametrize("value", ["thirty", "0", "-5", ""])
+def test_a_retention_period_that_is_not_a_positive_number_purges_nothing(own_db, monkeypatch, value):
+    bind, root = own_db
+    monkeypatch.setenv("ANTOVA_RETENTION_DAYS", value)
+    with Session(bind) as db:
+        assert retention.purge_expired(db, NOW) == []
+    assert (root / "TENDER-2026-931").is_dir()
+
+
+def test_purge_reads_a_non_utc_now_as_the_same_instant(own_db, monkeypatch):
+    bind, _ = own_db
+    monkeypatch.setenv("ANTOVA_RETENTION_DAYS", "30")
+    # 30.5 days after the newer tender's ingest, given in UTC+5: it is past retention only if read as UTC.
+    later = (NOW + timedelta(days=1, hours=12)).astimezone(timezone(timedelta(hours=5)))
+    with Session(bind) as db:
+        assert retention.purge_expired(db, later) == ["TENDER-2026-929", "TENDER-2026-931"]

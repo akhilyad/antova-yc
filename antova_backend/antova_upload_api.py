@@ -19,6 +19,7 @@ Limits (environment, with defaults):
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -124,6 +125,23 @@ def check_pdf(path: Path) -> int:
     return pages
 
 
+SYNTHETIC_FOUNDER_ONLY = "Only the founder can mark a tender synthetic, or change the documents of one."
+
+
+def _synthetic_founder_only(folder: Path, principal: ReviewerPrincipal) -> None:
+    """403 for a reviewer who is not the founder when the stored manifest is synthetic: "synthetic" switches
+    off the zero-retention guard (R24), so a reviewer must not put real documents under it."""
+    if principal.id == FOUNDER_ID:
+        return
+    stored = folder / "manifest.json"
+    try:
+        synthetic = stored.is_file() and json.loads(stored.read_text(encoding="utf-8")).get("synthetic") is True
+    except (ValueError, OSError, AttributeError):
+        synthetic = False
+    if synthetic:
+        raise _bad(403, SYNTHETIC_FOUNDER_ONLY)
+
+
 @router.put("/tenders/{tender_id}/files/{filename}", status_code=201)
 async def put_file(tender_id: str, filename: str, request: Request, db: Session = Depends(get_db),
                    principal: ReviewerPrincipal = Depends(require_review_token)) -> dict[str, Any]:
@@ -132,6 +150,7 @@ async def put_file(tender_id: str, filename: str, request: Request, db: Session 
         raise _bad(422, "The file name must be 1 to 120 letters, digits, dots, spaces, dashes or underscores, ending .pdf")
     folder = tender_folder(tender_id)
     _frozen(db, tender_id)
+    _synthetic_founder_only(folder, principal)
     existing = {p.name.lower() for p in folder.glob("*.pdf")} if folder.is_dir() else set()
     if filename.lower() not in existing and len(existing) >= max_tender_files():
         raise _bad(409, f"A tender holds at most {max_tender_files()} PDFs")
@@ -173,6 +192,14 @@ async def put_manifest(tender_id: str, request: Request, db: Session = Depends(g
         text = body.decode("utf-8")
     except UnicodeDecodeError:
         raise _bad(422, "The manifest must be UTF-8 JSON") from None
+    try:
+        claims_synthetic = json.loads(text).get("synthetic") is True
+    except (ValueError, AttributeError):
+        claims_synthetic = False  # parse_manifest reports the fault
+    if claims_synthetic and principal.id != FOUNDER_ID:
+        # "synthetic" switches off the zero-retention guard for contract text (R24): never a reviewer's call.
+        raise _bad(403, SYNTHETIC_FOUNDER_ONLY)
+    _synthetic_founder_only(folder, principal)  # nor may a reviewer replace a synthetic manifest
     folder.mkdir(parents=True, exist_ok=True)
     try:
         manifest = parse_manifest(folder, text)
@@ -180,9 +207,6 @@ async def put_manifest(tender_id: str, request: Request, db: Session = Depends(g
         raise _bad(422, str(exc)) from None
     if manifest.tender_id != tender_id:
         raise _bad(422, f"The manifest names tender {manifest.tender_id!r}, not {tender_id!r}")
-    if manifest.synthetic and principal.id != FOUNDER_ID:
-        # "synthetic" switches off the zero-retention guard for contract text (R24): never a reviewer's call.
-        raise _bad(403, "Only the founder can mark a tender synthetic.")
     temp = folder / f".manifest-{secrets.token_hex(6)}.tmp"
     try:
         temp.write_text(text, encoding="utf-8")

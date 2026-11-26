@@ -21,6 +21,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import secrets
 import shutil
 import sys
 from datetime import datetime, timedelta, timezone
@@ -32,11 +34,13 @@ from sqlalchemy.orm import Session
 from antova_db import (ApproverRemovalRecord, Base, CellReviewRecord, ContractGateRecord, ContractTermRecord,
                        CounterpartyRecord, DeletionLogRecord, FindingDispositionRecord, IngestRunRecord,
                        SourceDocumentRecord, StageArtifactRecord, TenderRecord, TenderRepository, VendorRecord)
+from antova_ingest.parse import TENDER_ID_PATTERN
 
 log = logging.getLogger(__name__)
 
 PURGED_NOTE = "artifacts purged after a counterparty deletion; re-ingest needed"
 RESPONSES_DIR = "saved_responses"
+TOMBSTONE_PREFIX = ".purged-"  # a tender folder renamed for removal; swept on every purge
 
 
 def _files_root() -> Optional[Path]:
@@ -88,11 +92,41 @@ def _delete_files(shas: set[str]) -> tuple[int, int]:
     return documents, responses
 
 
+def _drop_from_manifests(removed: dict[str, set[str]]) -> int:
+    """Take the deleted documents (per tender: their file names) out of each tender's manifest.json, so a
+    re-ingest reads what is left. Written whole or not at all. Returns the manifests changed."""
+    root = _files_root()
+    if root is None:
+        return 0
+    changed = 0
+    for tender_id, files in sorted(removed.items()):
+        folder = _tender_folder(root, tender_id)
+        path = folder / "manifest.json" if folder is not None else None
+        if path is None or not path.is_file():
+            continue
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        documents = manifest.get("documents") or []
+        kept = [d for d in documents if d.get("file") not in files]
+        if len(kept) == len(documents):
+            continue
+        manifest["documents"] = kept
+        temp = path.with_name(".manifest-purge.tmp")
+        temp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(temp, path)
+        changed += 1
+    return changed
+
+
 def delete_counterparty(db: Session, counterparty_id: str, deleted_by: str,
                         now: Optional[datetime] = None) -> Optional[dict[str, int]]:
     """Delete one counterparty's documents and evidence everywhere. None when nothing names it.
 
-    Returns the counts written to the deletion log."""
+    Returns the counts written to the deletion log.
+
+    Retry safety: rows go in one transaction, committed only after the files are gone. If a file
+    deletion fails, the transaction rolls back and nothing is logged; calling it again finds the same
+    rows, deletes what files remain (missing ones are skipped) and finishes. A crash after the files
+    but before the commit leaves rows naming deleted files; the retry removes those rows too."""
     now = now or datetime.now(timezone.utc)
     repo = TenderRepository(db)
     documents = db.query(SourceDocumentRecord).filter_by(counterparty_id=counterparty_id).all()
@@ -106,6 +140,9 @@ def delete_counterparty(db: Session, counterparty_id: str, deleted_by: str,
         return None
 
     tenders = {d.tender_id for d in documents} | {t for t, _ in linked}
+    removed_files: dict[str, set[str]] = {}
+    for d in documents:
+        removed_files.setdefault(d.tender_id, set()).add(d.filename)
     shas = {d.sha256 for d in documents}
     counts = {"documents": len(documents), "files": 0, "saved_responses": 0, "contract_terms": 0,
               "finding_dispositions": 0, "cell_reviews": 0, "approver_removals": 0, "stage_artifacts": 0,
@@ -145,7 +182,12 @@ def delete_counterparty(db: Session, counterparty_id: str, deleted_by: str,
         counts["counterparties"] = 1
     db.flush()
     # Files go last, once every row is gone in this transaction; then the log and the commit.
-    counts["files"], counts["saved_responses"] = _delete_files(shas)
+    try:
+        _drop_from_manifests(removed_files)
+        counts["files"], counts["saved_responses"] = _delete_files(shas)
+    except Exception:
+        db.rollback()
+        raise
     db.add(DeletionLogRecord(counterparty_id=counterparty_id, deleted_by=deleted_by, deleted_at=now,
                              counts=json.dumps(counts, sort_keys=True)))
     db.commit()
@@ -176,23 +218,50 @@ def retention_days() -> Optional[int]:
     return days if days > 0 else None
 
 
+def _sweep(root: Path, db: Session, cutoff: datetime) -> None:
+    """Remove tombstones, and tender folders with no tender row untouched since before the cutoff (an
+    earlier purge's leftovers). A newer folder without a row is an upload not yet ingested: kept."""
+    known = {t for (t,) in db.query(TenderRecord.id)}
+    for folder in [p for p in root.iterdir() if p.is_dir()]:
+        stale = datetime.fromtimestamp(folder.stat().st_mtime, timezone.utc).replace(tzinfo=None) < cutoff
+        orphan = (folder.name.startswith(TOMBSTONE_PREFIX)
+                  or (re.fullmatch(TENDER_ID_PATTERN, folder.name) and folder.name not in known and stale))
+        if orphan:
+            try:
+                shutil.rmtree(folder)
+            except OSError:
+                log.warning("retention purge: could not remove %s; the next purge tries again", folder.name)
+
+
 def purge_expired(db: Session, now: datetime) -> list[str]:
     """Delete the tenders ingested more than ANTOVA_RETENTION_DAYS before `now`, with their folders.
-    Returns their IDs, sorted. Nothing is purged without a retention period."""
+    Returns their IDs, sorted. Nothing is purged without a retention period.
+
+    Each folder is renamed to a tombstone before the rows are committed and removed after; whatever a
+    failed removal leaves (a tombstone, or a folder with no tender row) is swept on every purge."""
     days = retention_days()
     if days is None:
         return []
     cutoff = (now.astimezone(timezone.utc) if now.tzinfo else now).replace(tzinfo=None) - timedelta(days=days)
     expired = sorted(t for (t,) in db.query(TenderRecord.id).filter(TenderRecord.ingested_at < cutoff))
-    for tender_id in expired:
-        delete_tender_rows(db, tender_id)
-    db.commit()
     root = _files_root()
-    if root is not None:
+    tombstones = []
+    try:
         for tender_id in expired:
-            folder = _tender_folder(root, tender_id)
+            delete_tender_rows(db, tender_id)
+            folder = _tender_folder(root, tender_id) if root is not None else None
             if folder is not None and folder.is_dir():
-                shutil.rmtree(folder)
+                tombstone = folder.with_name(f"{TOMBSTONE_PREFIX}{tender_id}-{secrets.token_hex(4)}")
+                folder.rename(tombstone)
+                tombstones.append((folder, tombstone))
+        db.commit()
+    except Exception:
+        db.rollback()
+        for folder, tombstone in tombstones:  # the rows stay, so the folders do too
+            tombstone.rename(folder)
+        raise
+    if root is not None and root.is_dir():
+        _sweep(root, db, cutoff)
         if expired:
             _clear_crop_cache()
     log.info("retention purge: days=%d tenders=%s", days, expired)

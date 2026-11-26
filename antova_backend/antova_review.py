@@ -297,8 +297,30 @@ _CONTRACT_KEYS = ("contract", "contract_terms", "contracted", "cas")
 
 
 def _is_contract_finding(finding: Mapping[str, Any]) -> bool:
+    """A contract finding (antova_ingest.contract_findings): its category is one of the approver-rule
+    categories, or it is on a CT- term. TBE findings (antova_ingest.findings) carry a kind, no category."""
     return (finding.get("category") in _CONTRACT_FINDING_CATEGORIES
             or str(finding.get("param_id") or "").startswith(CONTRACT_PREFIX))
+
+
+def _names_any(value: Any, names: set[str]) -> bool:
+    return any(name in json.dumps(value, default=str, ensure_ascii=False) for name in names)
+
+
+def _without_contract_files(stats: dict[str, Any], names: set[str]) -> dict[str, Any]:
+    """Ingest stats without any entry keyed by, or naming, a contract document (locales, no_text_pages,
+    warnings, ...). A scalar stat that names one is dropped whole."""
+    if not names:
+        return stats
+    out: dict[str, Any] = {}
+    for key, value in stats.items():
+        if isinstance(value, dict):
+            out[key] = {k: v for k, v in value.items() if k not in names and not _names_any(v, names)}
+        elif isinstance(value, list):
+            out[key] = [v for v in value if not _names_any(v, names)]
+        elif not _names_any(value, names):
+            out[key] = value
+    return out
 
 
 def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -311,9 +333,14 @@ def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if tender.get("findings") is not None:
         tender["findings"] = [f for f in tender["findings"] if not _is_contract_finding(f)]
     public = {k: v for k, v in payload.items() if k not in _CONTRACT_KEYS}
+    contract_files = {d.get("filename") for d in payload.get("documents") or []
+                      if d.get("role") in _CONTRACT_DOC_ROLES} - {None}
     return {
         **public,
-        "ingest_stats": {k: v for k, v in payload["ingest_stats"].items() if k not in _RUN_COST_STATS},
+        "ingest_stats": _without_contract_files(
+            {k: v for k, v in payload["ingest_stats"].items() if k not in _RUN_COST_STATS}, contract_files),
+        "stage_log": [e for e in payload.get("stage_log") or []
+                      if "contract" not in str(e.get("stage", "")).lower()],
         "documents": [d for d in payload.get("documents") or [] if d.get("role") not in _CONTRACT_DOC_ROLES],
         "tender": tender,
     }
