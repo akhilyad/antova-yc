@@ -81,6 +81,15 @@ class _Slot:
     value: FieldValue | None  # None: unresolved (see conflicts)
     citations: list[Citation]
     conflicts: list[dict] = field(default_factory=list)
+    # Informational flags (R40 amended): the cell opens for review, but the term is not a conflict.
+    notes: list[dict] = field(default_factory=list)
+
+
+QUOTED_TOGETHER = "several clauses quoted; compare by hand"
+
+
+def _quoted_flag(name: str) -> dict:
+    return _field_flag("clauses_quoted_together", QUOTED_TOGETHER, name)
 
 
 def _field_flag(code: str, message: str, field_name: str, source: str | None = None) -> dict:
@@ -126,7 +135,7 @@ def _layer(param: ParameterDef, passages: list[Evidence]) -> dict[str, _Slot]:
             # Ruling R40: a citation-only field is never compared (R18), so several quoted clauses are not a
             # conflict: every clause is kept, quoted and cited; the comparable fields decide a conflict.
             slots[f.name] = _Slot(_quoted_together([d.values[f.name] for d in distinct]),
-                                  [e.citation for e in distinct])
+                                  [e.citation for e in distinct], notes=[_quoted_flag(f.name)])
             continue
         said = "; ".join(f"{_where(e.citation)} says {e.values[f.name].display}" for e in distinct)
         slots[f.name] = _Slot(None, [e.citation for e in distinct], [_field_flag(
@@ -146,7 +155,8 @@ def _override(state: dict[str, _Slot], layer: dict[str, _Slot]) -> None:
     """A later document governs the fields it states; the earlier citation is kept."""
     for name, new in layer.items():
         prior = state.get(name)
-        state[name] = new if prior is None else _Slot(new.value, prior.citations + new.citations, list(new.conflicts))
+        state[name] = new if prior is None else _Slot(new.value, prior.citations + new.citations, list(new.conflicts),
+                                                      list(new.notes))
 
 
 def _unordered(state: dict[str, _Slot], layer: dict[str, _Slot], param: ParameterDef, reason: str) -> None:
@@ -159,8 +169,9 @@ def _unordered(state: dict[str, _Slot], layer: dict[str, _Slot], param: Paramete
         elif not prior.conflicts and not new.conflicts and _same(prior.value, new.value):
             prior.citations.extend(new.citations)
         elif name in CITATION_ONLY and not prior.conflicts and not new.conflicts:
-            # Never compared (R18, R40): both clauses are quoted, whatever their order.
-            state[name] = _Slot(_quoted_together([prior.value, new.value]), prior.citations + new.citations)
+            # Never compared (R18, R40): both clauses are quoted, whatever their order, and a person compares them.
+            state[name] = _Slot(_quoted_together([prior.value, new.value]), prior.citations + new.citations,
+                                notes=[_quoted_flag(name)])
         else:
             state[name] = _Slot(None, prior.citations + new.citations, [*prior.conflicts, *new.conflicts, _field_flag(
                 "amendment_order_unknown",
@@ -193,6 +204,7 @@ class _Resolved:
     # False when a document of the source was not read: what it states is unknown, so the source has no
     # values (not the values of the documents that were read) and neither gives nor takes inherited values.
     complete: bool = True
+    notes: list[dict] = field(default_factory=list)
 
 
 def _resolve_documents(param: ParameterDef, entries: list[DocumentEntry], by_file: Mapping[str, DocumentEntry],
@@ -222,7 +234,8 @@ def _resolve_documents(param: ParameterDef, entries: list[DocumentEntry], by_fil
     citations = tuple(dict.fromkeys(c for f in param.fields if f.name in state for c in state[f.name].citations))
     conflicts = [c for f in param.fields if f.name in state for c in state[f.name].conflicts]
     stated = {f.name: tuple(state[f.name].citations) for f in param.fields if f.name in state}
-    return _Resolved(TermSource("document", values, citations), conflicts, stated)
+    notes = [n for f in param.fields if f.name in state for n in state[f.name].notes]
+    return _Resolved(TermSource("document", values, citations), conflicts, stated, notes=notes)
 
 
 def _passages(files: list[str], evidence: Mapping[str, list[Evidence]]) -> list[Evidence]:
@@ -393,6 +406,8 @@ def resolve_contract_terms(manifest: TenderManifest,
             for source, resolved in (("offered", offer), ("fa", fa), ("owner", owner)):
                 for conflict in resolved.conflicts:
                     _add(flags, {**conflict, "source": source})
+                for note in resolved.notes:
+                    _add(flags, {**note, "source": source})
             if offer.conflicts or fa.conflicts or owner.conflicts:
                 state = "conflict"
             exclusions: tuple[Citation, ...] = ()

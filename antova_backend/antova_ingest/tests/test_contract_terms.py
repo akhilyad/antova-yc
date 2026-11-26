@@ -593,7 +593,10 @@ def test_several_quoted_escalation_clauses_in_one_source_are_not_a_conflict():
     a, b = _ev("fa-a.pdf", "CT-13", 4, fixed), _ev("fa-a.pdf", "CT-13", 4, lump)
     terms = resolve_contract_terms(_manifest([BID, FA]), {"bid-a.pdf": [], "fa-a.pdf": [a, b]})
     term = terms[("vendor-a", "CT-13")]
-    assert term.state != "conflict" and term.flags == ()
+    assert term.state != "conflict"
+    # R40 amended: an informational flag, so the cell opens for a person to compare the quoted clauses.
+    assert [(f["code"], f["message"], f["field"], f["source"]) for f in term.flags] == [
+        ("clauses_quoted_together", "several clauses quoted; compare by hand", "escalation_formula", "fa")]
     assert term.fa.values["price_fixed_after_ntp"].display == "fixed after NTP"
     assert term.fa.values["price_type"].display == "fixed lump sum"
     escalation = term.fa.values["escalation_formula"]
@@ -613,3 +616,25 @@ def test_a_manual_term_keeps_its_contract_cell_open_until_reviewed():
     review = {"evidence_hash": "h1", "action": "approve"}
     assert contract_cell_state(term, review) == "reviewed"
     assert contract_open_items([term], [], [], {("CT-09", "vendor-a"): review}, None, None) == []
+
+
+def test_quoted_escalation_clauses_of_an_amendment_of_unknown_order_are_quoted_together():
+    """R40 amended, the _unordered path: an amendment dated on or before the agreement it amends, quoting another
+    escalation clause, is no conflict; both are quoted and the cell opens for review."""
+    from antova_review import contract_cell_state
+
+    original = "The price is subject to escalation by the formula P = P0 x (0.5 + 0.5 x I/I0)."
+    amended = "The price is subject to escalation by the formula P = P0 x (0.3 + 0.7 x I/I0)."
+    early = DocumentEntry(file="fa-a-amd1.pdf", role="framework_agreement", counterparty_id="cp-a",
+                          amends="fa-a.pdf", dated=date(2025, 12, 1))
+    terms = resolve_contract_terms(_manifest([BID, FA, early]), {
+        "bid-a.pdf": [], "fa-a.pdf": [_ev("fa-a.pdf", "CT-13", 4, original)],
+        "fa-a-amd1.pdf": [_ev("fa-a-amd1.pdf", "CT-13", 2, amended)]})
+    term = terms[("vendor-a", "CT-13")]
+    assert term.state != "conflict"
+    assert [f["code"] for f in term.flags] == ["clauses_quoted_together"]
+    quoted = term.fa.values["escalation_formula"].display
+    assert original in quoted and amended in quoted
+    stored = {"param_id": "CT-13", "vendor_id": "vendor-a", "state": term.state, "flags": list(term.flags),
+              "evidence_hash": "h"}
+    assert contract_cell_state(stored, None) == "open"

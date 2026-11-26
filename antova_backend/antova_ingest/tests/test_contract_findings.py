@@ -367,6 +367,10 @@ def test_several_quoted_clauses_of_a_citation_only_field_in_the_baseline_are_no_
     assert term["state"] != "conflict"
     quoted = term["fa"]["values"]["escalation_formula"]["display"]
     assert ESCALATION in quoted and other in quoted
+    # R40 amended: no finding, but the cell is open for a person to compare the quoted clauses.
+    assert [f for f in body["findings"] if f["param_id"] == "CT-13"] == []
+    from antova_review import contract_cell_state
+    assert contract_cell_state({**term, "evidence_hash": "h"}, None) == "open"
 
 
 def test_both_sides_quoting_a_citation_only_clause_is_no_finding():

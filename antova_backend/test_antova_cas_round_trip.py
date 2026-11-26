@@ -108,6 +108,7 @@ def signed_off(client):
     # 2. The flagged contract cells (conflicts, flags, the cited order of precedence) are reviewed.
     cells = [i["param_id"] for i in contract["gate"]["open_items"] if i["kind"] == "contract_cell"]
     assert "CT-17" in cells
+    assert "CT-13" in cells  # the agreement's price-basis clauses are quoted together (R40): compared by hand
     for param_id in cells:
         response = client.put(f"{REVIEW}/reviews/{param_id}/{KESTREL}",
                               json={"action": "approve", "note": "checked against the clause"}, headers=PIA)
