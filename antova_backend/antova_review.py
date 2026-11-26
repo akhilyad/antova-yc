@@ -290,12 +290,30 @@ def brief_payload(
 # What the run cost Antova. The founder sees it on the review payload; the public brief never does.
 _RUN_COST_STATS = ("api_cost_usd", "cogs_usd")
 _RUN_COST_TENDER = ("compute_cogs",)
+# Contract material is for the deployment's reviewers only (spec 4.7): never on the public brief.
+_CONTRACT_DOC_ROLES = ("framework_agreement", "owner_contract")
+_CONTRACT_FINDING_CATEGORIES = ("fa_conformance", "back_to_back", "budget", "missing")  # approvers.CATEGORIES
+_CONTRACT_KEYS = ("contract", "contract_terms", "contracted", "cas")
+
+
+def _is_contract_finding(finding: Mapping[str, Any]) -> bool:
+    return (finding.get("category") in _CONTRACT_FINDING_CATEGORIES
+            or str(finding.get("param_id") or "").startswith(CONTRACT_PREFIX))
 
 
 def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """A copy of a `brief_payload` result with Antova's run cost removed, for GET /api/briefs/{share_id}."""
+    """A copy of a `brief_payload` result for GET /api/briefs/{share_id}: without Antova's run cost, and
+    without contract documents, contract terms (CT- parameters), contract findings or the CAS."""
+    tender = {k: v for k, v in payload["tender"].items() if k not in _RUN_COST_TENDER + _CONTRACT_KEYS}
+    if tender.get("parameters") is not None:
+        tender["parameters"] = [p for p in tender["parameters"]
+                                if not str(p.get("id") or "").startswith(CONTRACT_PREFIX)]
+    if tender.get("findings") is not None:
+        tender["findings"] = [f for f in tender["findings"] if not _is_contract_finding(f)]
+    public = {k: v for k, v in payload.items() if k not in _CONTRACT_KEYS}
     return {
-        **payload,
+        **public,
         "ingest_stats": {k: v for k, v in payload["ingest_stats"].items() if k not in _RUN_COST_STATS},
-        "tender": {k: v for k, v in payload["tender"].items() if k not in _RUN_COST_TENDER},
+        "documents": [d for d in payload.get("documents") or [] if d.get("role") not in _CONTRACT_DOC_ROLES],
+        "tender": tender,
     }

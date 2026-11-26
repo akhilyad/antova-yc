@@ -6,7 +6,8 @@ use: PUT every PDF, PUT the manifest, then POST /api/jobs/ingest.
 
 Every PDF is checked before it replaces anything: the name, the size (counted as it streams, so
 an oversized body is cut off, not buffered), the %PDF- header, that PyMuPDF opens it and it is
-not encrypted, and its page count. A tender whose brief is VERIFIED is frozen: its documents back
+not encrypted, and its page count. Only the founder may upload a manifest marked "synthetic" (it
+lets contract text reach a provider without a zero-retention agreement). A tender whose brief is VERIFIED is frozen: its documents back
 the evidence crops people see, so they cannot be replaced until the brief is withdrawn.
 
 Limits (environment, with defaults):
@@ -30,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
-from antova_auth import ReviewerPrincipal, require_review_token
+from antova_auth import FOUNDER_ID, ReviewerPrincipal, require_review_token
 from antova_db import TenderRepository, get_db
 from antova_ingest.parse import TENDER_ID_PATTERN, ManifestError, parse_manifest
 from antova_ingest.pipeline import tenders_root
@@ -179,6 +180,9 @@ async def put_manifest(tender_id: str, request: Request, db: Session = Depends(g
         raise _bad(422, str(exc)) from None
     if manifest.tender_id != tender_id:
         raise _bad(422, f"The manifest names tender {manifest.tender_id!r}, not {tender_id!r}")
+    if manifest.synthetic and principal.id != FOUNDER_ID:
+        # "synthetic" switches off the zero-retention guard for contract text (R24): never a reviewer's call.
+        raise _bad(403, "Only the founder can mark a tender synthetic.")
     temp = folder / f".manifest-{secrets.token_hex(6)}.tmp"
     try:
         temp.write_text(text, encoding="utf-8")

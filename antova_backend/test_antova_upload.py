@@ -253,3 +253,20 @@ def test_upload_then_ingest_gives_a_brief(client, root, monkeypatch):
     assert brief["tender"]["id"] == TENDER_ID and len(brief["tender"]["vendors"]) == 3
     assert [d["filename"] for d in brief["documents"]][0] == "MR-33kV-GIS-Rev4.pdf"
     shutil.rmtree(root / TENDER_ID)
+
+
+# --- the synthetic flag (R24) -------------------------------------------------------------------
+
+def test_only_the_founder_may_mark_a_manifest_synthetic(client, root, monkeypatch):
+    """`synthetic` switches off the zero-retention guard, so a reviewer cannot set it on an upload."""
+    monkeypatch.setenv("ANTOVA_REVIEWERS", json.dumps(
+        {"pia": {"name": "Pia Procura", "token": "tok-pia", "roles": ["procurement", "project_management"]}}))
+    _upload_all(client)
+    url = f"/api/review/tenders/{TENDER_ID}/manifest"
+    pia = {REVIEW_HEADER: "tok-pia"}
+    response = client.put(url, content=json.dumps({**_manifest(), "synthetic": True}), headers=pia)
+    assert response.status_code == 403 and "synthetic" in response.json()["detail"]
+    assert not (root / TENDER_ID / "manifest.json").exists()
+    real = {**_manifest(), "synthetic": False}
+    assert client.put(url, content=json.dumps(real), headers=pia).status_code == 200
+    assert client.put(url, content=json.dumps({**_manifest(), "synthetic": True})).status_code == 200  # founder

@@ -14,6 +14,9 @@ The CAS: GET ./cas assembles the vendor's contract approval sheet (antova_cas.bu
 ./cas/approvers/{role} records a suggested approver taken off it, with the reason and the reviewer from the token.
 
 Dispositions and gates never touch the tender's TBE status or its open items.
+
+Deletion: DELETE /counterparties/{id} (project_management role, or the founder) removes one counterparty's
+documents and evidence across every tender (antova_ingest.retention.delete_counterparty) and returns the counts.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ import antova_cas
 import antova_cas_export
 from antova_db import (ApproverRemovalRecord, ContractGateRecord, CounterpartyRecord, FindingDispositionRecord,
                        ProjectRecord, TenderRecord, TenderRepository, fa_version, get_db)
-from antova_ingest import approvers
+from antova_ingest import approvers, retention
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID, TBE_EQUIVALENT
 from antova_review import contract_cell_state, contract_open_items
 
@@ -381,3 +384,21 @@ def remove_approver(tender_id: str, vendor_id: str, role: str, body: ApproverRem
     log.info("approver removed: tender=%s vendor=%s role=%s by=%s", tender_id, vendor_id, role, principal.id)
     return {"approver": role, "reason": record.reason, "removed_by": record.removed_by,
             "created_at": record.created_at.isoformat()}
+
+
+# --- per-counterparty deletion ----------------------------------------------------------------------
+
+DELETE_ROLE = "project_management"
+
+
+@router.delete("/counterparties/{counterparty_id}")
+def delete_counterparty(counterparty_id: str, db: Session = Depends(get_db),
+                        principal: ReviewerPrincipal = Depends(require_review_token)):
+    """Delete the counterparty's documents, saved responses, contract terms, dispositions and CT- reviews in
+    every tender; affected tenders and gates go back to DRAFT. The deletion log keeps the counts only."""
+    if DELETE_ROLE not in principal.roles:
+        raise HTTPException(status_code=403, detail=f"Deleting a counterparty's data needs the {DELETE_ROLE} role.")
+    counts = retention.delete_counterparty(db, counterparty_id, principal.id)
+    if counts is None:
+        raise not_found()
+    return {"counterparty_id": counterparty_id, "counts": counts}
