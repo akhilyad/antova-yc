@@ -1,0 +1,16 @@
+{
+  "name": "default_v1",
+  "version": 1,
+  "always": ["project_management", "engineering", "finance"],
+  "procurement_when_negotiated": "procurement",
+  "legal_terms_role": "legal",
+  "director_role": "business_director",
+  "director_money_threshold": "100000",
+  "acceptance": {
+    "fa_conformance": "procurement",
+    "back_to_back": "project_management",
+    "budget": "finance",
+    "missing": "procurement"
+  },
+  "legal_terms_accept": "legal"
+}

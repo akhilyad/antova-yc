@@ -78,3 +78,41 @@ def test_cors_allows_configured_origin_only(client):
 
     denied = _preflight(client, "https://evil.example")
     assert "access-control-allow-origin" not in denied.headers
+
+
+# --- Task 10: reviewer roles -------------------------------------------------------------------
+
+import json as _json
+
+from antova_auth import FOUNDER_ID, ROLES, ReviewerConfigError, _configured
+
+
+def _principals(monkeypatch, reviewers, shared=None):
+    if shared is None:
+        monkeypatch.delenv("ANTOVA_REVIEW_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("ANTOVA_REVIEW_TOKEN", shared)
+    monkeypatch.setenv("ANTOVA_REVIEWERS", _json.dumps(reviewers))
+    return {p.id: p for _, p in _configured()}
+
+
+def test_reviewer_roles_parse(monkeypatch):
+    got = _principals(monkeypatch, {"ada": {"name": "Ada", "token": "t-ada", "roles": ["finance", "legal"]},
+                                    "bob": {"name": "Bob", "token": "t-bob"}})
+    assert got["ada"].roles == frozenset({"finance", "legal"})
+    assert got["bob"].roles == frozenset()
+
+
+def test_unknown_role_rejected(monkeypatch):
+    with pytest.raises(ReviewerConfigError):
+        _principals(monkeypatch, {"ada": {"name": "Ada", "token": "t-ada", "roles": ["janitor"]}})
+
+
+def test_roles_must_be_a_list(monkeypatch):
+    with pytest.raises(ReviewerConfigError):
+        _principals(monkeypatch, {"ada": {"name": "Ada", "token": "t-ada", "roles": "finance"}})
+
+
+def test_founder_has_all_roles(monkeypatch):
+    got = _principals(monkeypatch, {}, shared="t-founder")
+    assert got[FOUNDER_ID].roles == frozenset(ROLES)
