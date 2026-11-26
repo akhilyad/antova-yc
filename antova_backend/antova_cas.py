@@ -134,6 +134,9 @@ def _dec(value: Any) -> Decimal | None:
         return None
 
 
+decimal_or_none = _dec
+
+
 def _budget_field(label: str, line: dict | None, citations: list[dict], missing_reason: str) -> dict:
     if line is None:
         return _missing(label, missing_reason)
@@ -195,7 +198,8 @@ def _law(terms: _Terms) -> dict:
     return {**terms.fields("CT-14"), **terms.fields("CT-14", "fa", "fa_"), **terms.fields("CT-14", "owner", "owner_")}
 
 
-def _price(loaded, vendor_id: str, body: dict, project: ProjectBaseline, terms: _Terms) -> dict:
+def _price(loaded, vendor_id: str, body: dict, project: ProjectBaseline, terms: _Terms,
+           history: Mapping | None = None) -> dict:
     vendor = next((v for v in loaded.tender.vendors if v.id == vendor_id), None)
     headline = [vendor.headline_citation] if vendor is not None and vendor.headline_citation else []
     lines = {line["label"]: line for line in (body.get("budget") or {}).get(vendor_id) or []}
@@ -217,7 +221,30 @@ def _price(loaded, vendor_id: str, body: dict, project: ProjectBaseline, terms: 
                                                      lines.get("variance_with_options"), headline, NOT_KNOWN)
     out["variance_true_job_cost"] = _budget_field("Variance against the true job cost",
                                                   lines.get("variance_true_job_cost"), [], "true job cost not known")
+    out["history"] = _history(history)
     return out
+
+
+def _history(history: Mapping | None) -> dict:
+    """The offer's price per Wp / per kVA against the median of the buyer's past offers, with the set listed."""
+    label = "Price against your past offers"
+    comparison = (history or {}).get("comparison")
+    if not comparison:
+        return _missing(label, (history or {}).get("reason") or "fewer than 3 comparable past offers")
+    unit, currency = comparison["unit"], comparison["currency"]
+    places = Decimal("0.0001")
+    value, mid = Decimal(comparison["value"]), Decimal(comparison["median"])
+    delta = Decimal(comparison["delta_pct"]).quantize(Decimal("0.1"))
+    display = (f"{currency} {value.quantize(places)}/{unit} vs median {currency} {mid.quantize(places)}/{unit} "
+               f"({delta:+}%)")
+    listed = "; ".join(f"{r['project']} {r['offer_date']} {currency} {Decimal(r['unit_price']).quantize(places)}/{unit}"
+                       for r in comparison["rows"])
+    window = comparison["window"]
+    formula = (f"offered price / project capacity, against the median of {comparison['count']} past offers of the "
+               f"same equipment in {currency}, {window['from']} to {window['to']}: {listed}")
+    if comparison["excluded_other_currency"]:
+        formula += f"; {comparison['excluded_other_currency']} in another currency excluded"
+    return _field(label, "computed", display, formula=formula)
 
 
 def _gaps(body: dict, vendor_id: str) -> dict[str, dict]:
@@ -368,7 +395,7 @@ def suggested_roles(loaded, vendor_id: str, *, contract: Mapping, rules) -> list
     """The roles the rules suggest now, before removals."""
     body = contract.get("body") or {}
     findings = [f for f in body.get("findings") or [] if f.get("vendor_id") == vendor_id]
-    project = _baseline(loaded)
+    project = baseline(loaded)
     return [s.role for s in approver_rules.suggest_approvers(
         rules, findings=findings, budget_variance_pct=_variance_pct(body, vendor_id, project),
         signing_before_ntp=project.signing_before_ntp, procurement_negotiated=project.procurement_negotiated,
@@ -390,7 +417,7 @@ def _meta(loaded, contract: Mapping, findings: list[dict], dispositions: Mapping
     }
 
 
-def _baseline(loaded) -> ProjectBaseline:
+def baseline(loaded) -> ProjectBaseline:
     return ProjectBaseline.model_validate(loaded.tender.project or {})
 
 
@@ -399,17 +426,18 @@ def build_cas(loaded, vendor_id: str, *, contract: dict, dispositions: dict, rul
 
     `contract`: {"body": the contracted stage body, "terms": the vendor's stored terms, "run": the latest run
     (get_run), "gate": the gate row with its open items, "project": {"name", "buyer_entity"} or None,
-    "counterparty": {"legal_name", "parent_company"} or None}. `dispositions`: finding_id -> latest disposition
+    "counterparty": {"legal_name", "parent_company"} or None, "price_history": {"comparison", "reason"} or
+    absent}. `dispositions`: finding_id -> latest disposition
     row with its state. `removals`: approver removals, oldest first, each {"approver", "reason", "removed_by",
     "created_at"}."""
     body = contract.get("body") or {}
     findings = [f for f in body.get("findings") or [] if f.get("vendor_id") == vendor_id]
     terms = _Terms(contract.get("terms") or [], loaded.documents)
-    project = _baseline(loaded)
+    project = baseline(loaded)
     return {
         "project": _project(loaded, contract, project, terms),
         "law": _law(terms),
-        "price": _price(loaded, vendor_id, body, project, terms),
+        "price": _price(loaded, vendor_id, body, project, terms, contract.get("price_history")),
         "delivery": _delivery(loaded, vendor_id, terms),
         "payment_bonds": _payment_bonds(body, vendor_id, terms),
         "lds": _lds(findings, vendor_id, terms),

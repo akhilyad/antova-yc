@@ -21,7 +21,7 @@ from antova_ingest.contract_findings import assess
 from antova_ingest.pipeline import run_ingest
 from antova_ingest.tests.fakes import PACK, AnswerKeyLocator, load_expected
 from antova_ingest.tests.helpers import evidence
-from antova_ingest.types import BaselineMoney, DocumentEntry, OwnerTerms, ProjectBaseline, TenderManifest
+from antova_ingest.types import BaselineMoney, BaselineNumber, DocumentEntry, OwnerTerms, ProjectBaseline, TenderManifest
 from antova_ingest.values import PriceRead
 from antova_service import persist
 
@@ -370,3 +370,52 @@ def test_a_manual_term_shows_its_reason_on_the_sheet():
     for source in ("offered", "fa", "owner"):
         field = _Terms([term], []).field("CT-09", "title_event", source)
         assert (field["state"], field["reason"]) == ("missing", MANUAL_REASON)
+
+
+
+# --- price history (Task 18) ------------------------------------------------------------------------------
+
+def _history_rows(*rows):
+    """Replace the price history with (price, currency) rows of 20 MVA switchgear, in the last quarter."""
+    from datetime import datetime, timedelta, timezone
+    from antova_db import PriceHistoryRecord
+    past = date.today().replace(day=1) - timedelta(days=100)  # always within the four quarters before today's
+    db = SessionLocal()
+    try:
+        db.query(PriceHistoryRecord).delete()
+        for i, (price, currency) in enumerate(rows):
+            db.add(PriceHistoryRecord(project=f"Past {i}", equipment="mv_gis_switchgear", capacity_mva="20",
+                                      offer_date=past, price=price, currency=currency, option_lines="[]",
+                                      imported_at=datetime.now(timezone.utc), imported_by="pia"))
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def with_capacity(client, ingested, monkeypatch):
+    monkeypatch.setitem(globals(), "PROJECT", PROJECT.model_copy(update={"capacity_mva": BaselineNumber(value=D("20"))}))
+    _persist(ingested)
+    yield client
+    _history_rows()
+
+
+def test_price_history_missing_without_capacity(cas):
+    field = cas["price"]["history"]
+    assert field["state"] == "missing" and field["reason"] == "the project capacity (MWp or MVA) not entered"
+
+
+def test_price_history_computed_against_the_median(with_capacity):
+    _history_rows(("1800000", "EUR"), ("2000000", "EUR"), ("2600000", "EUR"), ("900000", "GBP"))
+    field = with_capacity.get(CAS, headers=PIA).json()["price"]["history"]
+    assert field["state"] == "computed", field
+    # EUR 2,106,000.00 offered over 20,000 kVA = 105.30/kVA; the median of 90, 100, 130 is 100
+    assert field["display"] == "EUR 105.3000/kVA vs median EUR 100.0000/kVA (+5.3%)"
+    assert "median of 3 past offers" in field["formula"] and "Past 0" in field["formula"]
+    assert "1 in another currency excluded" in field["formula"]
+
+
+def test_price_history_fewer_than_three(with_capacity):
+    _history_rows(("1800000", "EUR"), ("2000000", "EUR"))
+    field = with_capacity.get(CAS, headers=PIA).json()["price"]["history"]
+    assert field["state"] == "missing" and field["reason"] == "fewer than 3 comparable past offers"

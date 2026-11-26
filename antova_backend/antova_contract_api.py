@@ -17,6 +17,11 @@ Dispositions and gates never touch the tender's TBE status or its open items.
 
 Deletion: DELETE /counterparties/{id} (project_management role, or the founder) removes one counterparty's
 documents and evidence across every tender (antova_ingest.retention.delete_counterparty) and returns the counts.
+
+Price history: POST /price-history (multipart CSV, field `file`) imports the buyer's past offers
+(antova_ingest.price_history) and returns {"imported", "rejected": [{"line", "reason"}]}. It needs the procurement
+role (prices are procurement's data, as accepting a commercial finding is), or the founder; a wrong header or a
+file that is not UTF-8 is 422 and imports nothing.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, StringConstraints, model_validator
 from sqlalchemy.orm import Session
@@ -37,7 +42,7 @@ import antova_cas
 import antova_cas_export
 from antova_db import (ApproverRemovalRecord, ContractGateRecord, CounterpartyRecord, FindingDispositionRecord,
                        ProjectRecord, TenderRecord, TenderRepository, fa_version, get_db)
-from antova_ingest import approvers, retention
+from antova_ingest import approvers, price_history, retention
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID, TBE_EQUIVALENT
 from antova_review import contract_cell_state, contract_open_items
 
@@ -296,6 +301,24 @@ def _removals(db: Session, tender_id: str, vendor_id: str) -> list[dict]:
              "created_at": r.created_at.isoformat()} for r in rows]
 
 
+def _price_history(db: Session, loaded, body: dict | None, vendor_id: str) -> dict:
+    """The CAS price history comparison: {"comparison": dict or None, "reason": why there is none}. The offer is
+    the vendor's offered price (budget line "offered") over the project capacity; the window ends before the
+    quarter the tender was ingested in."""
+    project = antova_cas.baseline(loaded)
+    line = next((l for l in ((body or {}).get("budget") or {}).get(vendor_id) or [] if l["label"] == "offered"), None)
+    basis = price_history.offer_basis(project.capacity_mwp.value if project.capacity_mwp else None,
+                                      project.capacity_mva.value if project.capacity_mva else None,
+                                      antova_cas.decimal_or_none((line or {}).get("amount")),
+                                      (line or {}).get("currency"))
+    if isinstance(basis, str):
+        return {"comparison": None, "reason": basis}
+    comparison = price_history.price_comparison(
+        db, equipment=loaded.tender.equipment_class, basis=basis[0], value=basis[1], currency=basis[2],
+        offer_date=loaded.meta.ingested_at.date())
+    return {"comparison": comparison, "reason": "" if comparison else price_history.FEWER}
+
+
 def _cas_inputs(db: Session, tender_id: str, vendor_id: str):
     """The loaded tender and the stored contract inputs of the CAS. 404 for a tender without contract approval."""
     from antova_briefs_api import load_tender
@@ -312,6 +335,7 @@ def _cas_inputs(db: Session, tender_id: str, vendor_id: str):
         "body": repo.contracted_body(tender_id), "terms": repo.contract_terms(tender_id, vendor_id),
         "run": repo.get_run(tender_id), "gate": gate_row,
         "project": {"name": project.name, "buyer_entity": project.buyer_entity} if project else None,
+        "price_history": _price_history(db, loaded, repo.contracted_body(tender_id), vendor_id),
         "counterparty": ({"legal_name": counterparty.legal_name, "parent_company": counterparty.parent_company}
                          if counterparty else None),
     }
@@ -402,3 +426,28 @@ def delete_counterparty(counterparty_id: str, db: Session = Depends(get_db),
     if counts is None:
         raise not_found()
     return {"counterparty_id": counterparty_id, "counts": counts}
+
+
+# --- price history --------------------------------------------------------------------------------------
+
+PRICE_HISTORY_ROLE = "procurement"
+
+
+@router.post("/price-history")
+def import_price_history(file: UploadFile = File(...), db: Session = Depends(get_db),
+                         principal: ReviewerPrincipal = Depends(require_review_token)):
+    """Import past offers from a CSV; rows that fail are reported by line number and not imported."""
+    if PRICE_HISTORY_ROLE not in principal.roles:
+        raise HTTPException(status_code=403,
+                            detail=f"Importing price history needs the {PRICE_HISTORY_ROLE} role.")
+    try:
+        content = file.file.read().decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="The price history file must be UTF-8 text.") from None
+    try:
+        result = price_history.import_csv(db, content, principal.id)
+    except price_history.HeaderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    log.info("price history imported: rows=%d rejected=%d by=%s", result.imported, len(result.rejected),
+             principal.id)
+    return {"imported": result.imported, "rejected": result.rejected}

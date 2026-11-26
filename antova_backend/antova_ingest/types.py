@@ -161,6 +161,9 @@ class ProjectBaseline(BaseModel):
     fx: list[BaselineFx] = []
     # The delay scenario for LD comparisons, in weeks (spec 4.1); a formula needing days shows the x7.
     delay_scenario_weeks: BaselineNumber | None = None
+    # The plant's capacity, for the CAS price per Wp / per kVA against the price history (spec 7).
+    capacity_mwp: BaselineNumber | None = None
+    capacity_mva: BaselineNumber | None = None
     owner_terms: OwnerTerms | None = None
     procurement_negotiated: bool | None = None
     signing_before_ntp: bool | None = None
