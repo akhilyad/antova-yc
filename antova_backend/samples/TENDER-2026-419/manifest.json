@@ -1,0 +1,85 @@
+{
+  "tender_id": "TENDER-2026-419",
+  "title": "Call-off under framework agreements — 33kV GIS Switchgear Package, Contract Approval",
+  "client": "Brightmere Renewables EPC Ltd (fictional)",
+  "equipment_class": "mv_gis_switchgear",
+  "rate_table": "mv_gis_switchgear_v2",
+  "documents": [
+    {
+      "file": "MR-33kV-GIS-Rev4.pdf",
+      "role": "mr_spec"
+    },
+    {
+      "file": "Offer_cp-harlow_Harlow.pdf",
+      "role": "vendor_bid",
+      "vendor_id": "vendor-a",
+      "vendor_name": "Harlow Energy Systems Ltd",
+      "country": "United Kingdom",
+      "counterparty_id": "cp-harlow"
+    },
+    {
+      "file": "Offer_cp-kestrel_Kestrel.pdf",
+      "role": "vendor_bid",
+      "vendor_id": "vendor-b",
+      "vendor_name": "Kestrel Power Conversion UK Ltd",
+      "country": "United Kingdom",
+      "counterparty_id": "cp-kestrel"
+    },
+    {
+      "file": "FA_cp-harlow_FA-HES-2025-03.pdf",
+      "role": "framework_agreement",
+      "counterparty_id": "cp-harlow",
+      "dated": "2025-04-01"
+    },
+    {
+      "file": "FA_cp-kestrel_FA-KPC-2025-07.pdf",
+      "role": "framework_agreement",
+      "counterparty_id": "cp-kestrel",
+      "dated": "2025-05-12"
+    },
+    {
+      "file": "FA_cp-kestrel_FA-KPC-2025-07_Amendment-1.pdf",
+      "role": "framework_agreement",
+      "counterparty_id": "cp-kestrel",
+      "amends": "FA_cp-kestrel_FA-KPC-2025-07.pdf",
+      "dated": "2026-03-02"
+    },
+    {
+      "file": "Owner-Contract-Excerpt.pdf",
+      "role": "owner_contract",
+      "dated": "2026-06-30"
+    }
+  ],
+  "engineering_estimates": {
+    "busbar_cu_kg": 1480,
+    "heavy_haul_loads": 2
+  },
+  "project": {
+    "po_award_date": {
+      "value": "2027-01-15"
+    },
+    "frozen_budget": {
+      "amount": "480000.00",
+      "currency": "EUR"
+    },
+    "fx": [
+      {
+        "from_currency": "GBP",
+        "to_currency": "EUR",
+        "rate": "1.17",
+        "dated": "2026-11-01"
+      }
+    ],
+    "delay_scenario_weeks": {
+      "value": "8"
+    },
+    "owner_terms": {
+      "contract_value": {
+        "amount": "48000000.00",
+        "currency": "EUR"
+      },
+      "package_ld_share_pct": "2.5"
+    }
+  },
+  "synthetic": true
+}

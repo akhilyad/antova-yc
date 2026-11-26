@@ -1,0 +1,1403 @@
+{
+  "tender_id": "TENDER-2026-419",
+  "equipment_class": "mv_gis_switchgear",
+  "bay_count": 11,
+  "requirements": {
+    "PARAM-01": {
+      "page": 5,
+      "quotes": [
+        "Rated short-time withstand current Ik shall be 50 kA RMS for a duration of 3 s."
+      ],
+      "values": {
+        "ik": "50 kA",
+        "ik_duration": "3 s"
+      }
+    },
+    "PARAM-02": {
+      "page": 6,
+      "quotes": [
+        "Main busbars shall be electrolytic copper Cu-ETP rated for 2500 A continuous current."
+      ],
+      "values": {
+        "material": "Cu-ETP",
+        "rated_current": "2500 A"
+      }
+    },
+    "PARAM-03": {
+      "page": 6,
+      "quotes": [
+        "Enclosure protection shall be IP54 with internal arc classification IAC AFLR."
+      ],
+      "values": {
+        "ip": "IP54",
+        "iac_class": "AFLR"
+      }
+    },
+    "PARAM-04": {
+      "page": 7,
+      "quotes": [
+        "Protection IEDs shall communicate via IEC 61850 Edition 2 with PRP redundancy, with pre-wired RTU marshalling in a central marshalling cabinet."
+      ],
+      "values": {
+        "protocol": "IEC 61850 Ed. 2 with PRP",
+        "marshalling": "pre-wired"
+      }
+    },
+    "PARAM-05": {
+      "page": 13,
+      "quotes": [
+        "A 5-day witnessed integrated factory acceptance test (I-FAT) with primary injection shall be included in the contract price."
+      ],
+      "values": {
+        "witnessed_fat_days_included": "5"
+      }
+    },
+    "PARAM-06": {
+      "page": 14,
+      "quotes": [
+        "Delivery shall be DDP project site Brandenburg (Incoterms 2020).",
+        "The defect liability period shall be 36 months from commissioning."
+      ],
+      "values": {
+        "incoterm": "DDP",
+        "warranty_months": "36"
+      }
+    },
+    "PARAM-07": {
+      "page": 5,
+      "quotes": [
+        "Rated voltage Ur shall be not less than 36 kV."
+      ],
+      "values": {
+        "rated_voltage": "36 kV"
+      }
+    },
+    "PARAM-08": {
+      "page": 7,
+      "quotes": [
+        "Equipment shall be rated for a maximum ambient air temperature of +40 °C without derating."
+      ],
+      "values": {
+        "max_ambient": "40 °C"
+      }
+    }
+  },
+  "cells": {
+    "vendor-a": {
+      "PARAM-01": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Rated short-time withstand current (main busbar and breaker): 50 kA / 3 s.",
+        "values": {
+          "ik": "50 kA",
+          "ik_duration": "3 s"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-02": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Main busbars: silver-plated high-conductivity electrolytic copper Cu-ETP, 2.5 kA continuous.",
+        "values": {
+          "material": "Cu-ETP",
+          "rated_current": "2.5 kA"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-03": {
+        "status": "COMPLIANT",
+        "page": 7,
+        "quote": "Enclosure protection IP54 with rear gas exhaust ducting, internal arc classification IAC AFLR 50 kA 1 s.",
+        "values": {
+          "ip": "IP54",
+          "iac_class": "AFLR"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-04": {
+        "status": "COMPLIANT",
+        "page": 8,
+        "quote": "Protection IEDs NW-Prot 5 with IEC 61850 Ed.2 PRP dual-port fibre, pre-wired to the central RTU marshalling cabinet.",
+        "values": {
+          "protocol": "IEC 61850 Ed. 2 with PRP",
+          "marshalling": "pre-wired"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-05": {
+        "status": "COMPLIANT",
+        "page": 18,
+        "quote": "The price includes a 5-day client-witnessed I-FAT with primary injection.",
+        "values": {
+          "witnessed_fat_days_included": "5"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-06": {
+        "status": "COMPLIANT",
+        "page": 21,
+        "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period.",
+        "values": {
+          "incoterm": "DDP",
+          "warranty_months": "36"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-07": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Rated voltage Ur: 36 kV.",
+        "values": {
+          "rated_voltage": "36 kV"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-08": {
+        "status": "COMPLIANT",
+        "page": 7,
+        "quote": "Rated for ambient temperatures from -25 °C to +40 °C without derating.",
+        "values": {
+          "max_ambient": "40 °C"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      }
+    },
+    "vendor-b": {
+      "PARAM-01": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Rated short-time withstand current (main busbar and breaker): 50 kA / 3 s.",
+        "values": {
+          "ik": "50 kA",
+          "ik_duration": "3 s"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-02": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Main busbars: silver-plated high-conductivity electrolytic copper Cu-ETP, 2.5 kA continuous.",
+        "values": {
+          "material": "Cu-ETP",
+          "rated_current": "2.5 kA"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-03": {
+        "status": "COMPLIANT",
+        "page": 7,
+        "quote": "Enclosure protection IP54 with rear gas exhaust ducting, internal arc classification IAC AFLR 50 kA 1 s.",
+        "values": {
+          "ip": "IP54",
+          "iac_class": "AFLR"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-04": {
+        "status": "COMPLIANT",
+        "page": 8,
+        "quote": "Protection IEDs NW-Prot 5 with IEC 61850 Ed.2 PRP dual-port fibre, pre-wired to the central RTU marshalling cabinet.",
+        "values": {
+          "protocol": "IEC 61850 Ed. 2 with PRP",
+          "marshalling": "pre-wired"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-05": {
+        "status": "COMPLIANT",
+        "page": 18,
+        "quote": "The price includes a 5-day client-witnessed I-FAT with primary injection.",
+        "values": {
+          "witnessed_fat_days_included": "5"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-06": {
+        "status": "COMPLIANT",
+        "page": 21,
+        "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period.",
+        "values": {
+          "incoterm": "DDP",
+          "warranty_months": "36"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-07": {
+        "status": "COMPLIANT",
+        "page": 6,
+        "quote": "Rated voltage Ur: 36 kV.",
+        "values": {
+          "rated_voltage": "36 kV"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      },
+      "PARAM-08": {
+        "status": "COMPLIANT",
+        "page": 7,
+        "quote": "Rated for ambient temperatures from -25 °C to +40 °C without derating.",
+        "values": {
+          "max_ambient": "40 °C"
+        },
+        "secondary_page": null,
+        "adder": "0.00"
+      }
+    }
+  },
+  "vendors": {
+    "vendor-a": {
+      "name": "Harlow Energy Systems Ltd",
+      "headline_price": "452000.00",
+      "total_adders": "0.00",
+      "true_evaluated_price": "452000.00"
+    },
+    "vendor-b": {
+      "name": "Kestrel Power Conversion UK Ltd",
+      "headline_price": "441000.00",
+      "total_adders": "0.00",
+      "true_evaluated_price": "441000.00"
+    }
+  },
+  "negotiating_vendor": "vendor-b",
+  "clawback": {
+    "round_2": "0.00",
+    "round_3": "0.00"
+  },
+  "ideal_locate": {
+    "MR-33kV-GIS-Rev4.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "PARAM-07",
+          "page": 5,
+          "quote": "Rated voltage Ur shall be not less than 36 kV."
+        },
+        {
+          "param_id": "PARAM-01",
+          "page": 5,
+          "quote": "Rated short-time withstand current Ik shall be 50 kA RMS for a duration of 3 s."
+        },
+        {
+          "param_id": "PARAM-02",
+          "page": 6,
+          "quote": "Main busbars shall be electrolytic copper Cu-ETP rated for 2500 A continuous current."
+        },
+        {
+          "param_id": "PARAM-03",
+          "page": 6,
+          "quote": "Enclosure protection shall be IP54 with internal arc classification IAC AFLR."
+        },
+        {
+          "param_id": "PARAM-04",
+          "page": 7,
+          "quote": "Protection IEDs shall communicate via IEC 61850 Edition 2 with PRP redundancy, with pre-wired RTU marshalling in a central marshalling cabinet."
+        },
+        {
+          "param_id": "PARAM-08",
+          "page": 7,
+          "quote": "Equipment shall be rated for a maximum ambient air temperature of +40 °C without derating."
+        },
+        {
+          "param_id": "PARAM-05",
+          "page": 13,
+          "quote": "A 5-day witnessed integrated factory acceptance test (I-FAT) with primary injection shall be included in the contract price."
+        },
+        {
+          "param_id": "PARAM-06",
+          "page": 14,
+          "quote": "Delivery shall be DDP project site Brandenburg (Incoterms 2020)."
+        },
+        {
+          "param_id": "PARAM-06",
+          "page": 14,
+          "quote": "The defect liability period shall be 36 months from commissioning."
+        }
+      ],
+      "tender_facts": [
+        {
+          "fact": "bay_count",
+          "page": 3,
+          "quote": "The switchgear lineup comprises 11 bays (2 incomers, 1 bus coupler, 8 feeders) of gas-insulated switchgear."
+        }
+      ],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "Offer_cp-harlow_Harlow.pdf": {
+      "page_sections": [
+        {
+          "page": 1,
+          "section": "general"
+        }
+      ],
+      "candidates": [
+        {
+          "param_id": "PARAM-01",
+          "page": 6,
+          "quote": "Rated short-time withstand current (main busbar and breaker): 50 kA / 3 s."
+        },
+        {
+          "param_id": "PARAM-02",
+          "page": 6,
+          "quote": "Main busbars: silver-plated high-conductivity electrolytic copper Cu-ETP, 2.5 kA continuous."
+        },
+        {
+          "param_id": "PARAM-07",
+          "page": 6,
+          "quote": "Rated voltage Ur: 36 kV."
+        },
+        {
+          "param_id": "PARAM-03",
+          "page": 7,
+          "quote": "Enclosure protection IP54 with rear gas exhaust ducting, internal arc classification IAC AFLR 50 kA 1 s."
+        },
+        {
+          "param_id": "PARAM-08",
+          "page": 7,
+          "quote": "Rated for ambient temperatures from -25 °C to +40 °C without derating."
+        },
+        {
+          "param_id": "PARAM-04",
+          "page": 8,
+          "quote": "Protection IEDs NW-Prot 5 with IEC 61850 Ed.2 PRP dual-port fibre, pre-wired to the central RTU marshalling cabinet."
+        },
+        {
+          "param_id": "PARAM-05",
+          "page": 18,
+          "quote": "The price includes a 5-day client-witnessed I-FAT with primary injection."
+        },
+        {
+          "param_id": "PARAM-06",
+          "page": 21,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": {
+        "page": 22,
+        "quote": "Total lump-sum price for the complete scope: €452,000"
+      },
+      "cover_claim": {
+        "page": 2,
+        "quote": "Our offer is in full compliance with MR-33kV-GIS-Rev4 except minor commercial notes."
+      }
+    },
+    "Offer_cp-kestrel_Kestrel.pdf": {
+      "page_sections": [
+        {
+          "page": 1,
+          "section": "general"
+        }
+      ],
+      "candidates": [
+        {
+          "param_id": "PARAM-01",
+          "page": 6,
+          "quote": "Rated short-time withstand current (main busbar and breaker): 50 kA / 3 s."
+        },
+        {
+          "param_id": "PARAM-02",
+          "page": 6,
+          "quote": "Main busbars: silver-plated high-conductivity electrolytic copper Cu-ETP, 2.5 kA continuous."
+        },
+        {
+          "param_id": "PARAM-07",
+          "page": 6,
+          "quote": "Rated voltage Ur: 36 kV."
+        },
+        {
+          "param_id": "PARAM-03",
+          "page": 7,
+          "quote": "Enclosure protection IP54 with rear gas exhaust ducting, internal arc classification IAC AFLR 50 kA 1 s."
+        },
+        {
+          "param_id": "PARAM-08",
+          "page": 7,
+          "quote": "Rated for ambient temperatures from -25 °C to +40 °C without derating."
+        },
+        {
+          "param_id": "PARAM-04",
+          "page": 8,
+          "quote": "Protection IEDs NW-Prot 5 with IEC 61850 Ed.2 PRP dual-port fibre, pre-wired to the central RTU marshalling cabinet."
+        },
+        {
+          "param_id": "PARAM-05",
+          "page": 18,
+          "quote": "The price includes a 5-day client-witnessed I-FAT with primary injection."
+        },
+        {
+          "param_id": "PARAM-06",
+          "page": 21,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": {
+        "page": 22,
+        "quote": "Total lump-sum price for the complete scope: €441,000"
+      },
+      "cover_claim": {
+        "page": 2,
+        "quote": "Our offer is in full compliance with MR-33kV-GIS-Rev4 except minor commercial notes."
+      }
+    }
+  },
+  "ideal_contract_locate": {
+    "FA_cp-harlow_FA-HES-2025-03.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-17",
+          "page": 2,
+          "quote": "In case of conflict, the documents prevail in the following order: (1) the Purchase Order; (2) the Framework Agreement; (3) the Technical Specification; (4) the Offer."
+        },
+        {
+          "param_id": "CT-12",
+          "page": 3,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        },
+        {
+          "param_id": "CT-10",
+          "page": 3,
+          "quote": "The Buyer may issue the NTP within 8 months from the Project Purchase Order."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "Liquidated damages of 0.5% of the Contract Price per week of delay."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "Liquidated damages are capped at 10 % of the Contract Price."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is in EUR."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is a fixed lump sum."
+        },
+        {
+          "param_id": "CT-07",
+          "page": 4,
+          "quote": "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."
+        },
+        {
+          "param_id": "CT-06",
+          "page": 4,
+          "quote": "The advance payment is made against an advance payment bond of 10%."
+        },
+        {
+          "param_id": "CT-04",
+          "page": 5,
+          "quote": "The Supplier provides a warranty bond of 5% of the Contract Price."
+        },
+        {
+          "param_id": "CT-04",
+          "page": 5,
+          "quote": "The warranty bond is valid for 24 months."
+        },
+        {
+          "param_id": "CT-05",
+          "page": 5,
+          "quote": "A performance bond equal to ten percent (10%) of the Price."
+        },
+        {
+          "param_id": "CT-05",
+          "page": 5,
+          "quote": "The performance bond is released at Provisional Acceptance."
+        },
+        {
+          "param_id": "CT-15",
+          "page": 5,
+          "quote": "The Supplier holds credit insurance with Calder Mutual Credit Ltd."
+        },
+        {
+          "param_id": "CT-15",
+          "page": 5,
+          "quote": "The secured value under the credit insurance is EUR 2,000,000."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "The warranty period is 36 months from PAC."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "Defective parts shall be repaired or replaced on site at the Seller's cost."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "The warranty covers all components of the supply."
+        },
+        {
+          "param_id": "CT-09",
+          "page": 6,
+          "quote": "Title to the Goods passes to the Buyer on delivery."
+        },
+        {
+          "param_id": "CT-02",
+          "page": 6,
+          "quote": "The Supplier's total liability is limited to 100% of the Contract Price."
+        },
+        {
+          "param_id": "CT-11",
+          "page": 6,
+          "quote": "The equipment has a minimum operating period of 35 years."
+        },
+        {
+          "param_id": "CT-08",
+          "page": 7,
+          "quote": "The Buyer pays a termination fee of 5% of the price of the affected Goods."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 7,
+          "quote": "This contract is governed by the laws of England and Wales."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 7,
+          "quote": "Disputes shall be finally settled by ICC arbitration in London."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "FA_cp-kestrel_FA-KPC-2025-07.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-17",
+          "page": 2,
+          "quote": "In case of conflict, the documents prevail in the following order: (1) the Purchase Order; (2) the Framework Agreement; (3) the Technical Specification; (4) the Offer."
+        },
+        {
+          "param_id": "CT-12",
+          "page": 3,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        },
+        {
+          "param_id": "CT-10",
+          "page": 3,
+          "quote": "The Buyer may issue the NTP within 8 months from the Project Purchase Order."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "Liquidated damages of 0.5% of the Contract Price per week of delay."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "Liquidated damages are capped at 10 % of the Contract Price."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 3,
+          "quote": "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is in EUR."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The price is fixed and firm from the issue of the Notice to Proceed."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 4,
+          "quote": "The Contract Price is a fixed lump sum."
+        },
+        {
+          "param_id": "CT-07",
+          "page": 4,
+          "quote": "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."
+        },
+        {
+          "param_id": "CT-06",
+          "page": 4,
+          "quote": "The advance payment is made against an advance payment bond of 10%."
+        },
+        {
+          "param_id": "CT-04",
+          "page": 5,
+          "quote": "The Supplier provides a warranty bond of 5% of the Contract Price."
+        },
+        {
+          "param_id": "CT-04",
+          "page": 5,
+          "quote": "The warranty bond is valid for 24 months."
+        },
+        {
+          "param_id": "CT-05",
+          "page": 5,
+          "quote": "A performance bond equal to ten percent (10%) of the Price."
+        },
+        {
+          "param_id": "CT-05",
+          "page": 5,
+          "quote": "The performance bond is released at Provisional Acceptance."
+        },
+        {
+          "param_id": "CT-15",
+          "page": 5,
+          "quote": "The Supplier holds credit insurance with Fenwold Credit Assurance plc."
+        },
+        {
+          "param_id": "CT-15",
+          "page": 5,
+          "quote": "The secured value under the credit insurance is EUR 2,000,000."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "The warranty period is 60 months from PAC."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "Defective parts shall be repaired or replaced on site at the Seller's cost."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 6,
+          "quote": "The warranty covers all components of the supply."
+        },
+        {
+          "param_id": "CT-09",
+          "page": 6,
+          "quote": "Title to the Goods passes to the Buyer on delivery."
+        },
+        {
+          "param_id": "CT-02",
+          "page": 6,
+          "quote": "The Supplier's total liability is limited to EUR 450,000."
+        },
+        {
+          "param_id": "CT-11",
+          "page": 6,
+          "quote": "The equipment has a minimum operating period of 35 years."
+        },
+        {
+          "param_id": "CT-08",
+          "page": 7,
+          "quote": "The Buyer pays a termination fee of 5% of the price of the affected Goods."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 7,
+          "quote": "This contract is governed by the laws of England and Wales."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 7,
+          "quote": "Disputes shall be finally settled by ICC arbitration in London."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "FA_cp-kestrel_FA-KPC-2025-07_Amendment-1.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-03",
+          "page": 2,
+          "quote": "The warranty period is 66 months from PAC."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "Owner-Contract-Excerpt.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-01",
+          "page": 2,
+          "quote": "Liquidated damages of 0.5% of the Contract Price per week of delay."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 2,
+          "quote": "Liquidated damages are capped at 10 % of the Contract Price."
+        },
+        {
+          "param_id": "CT-02",
+          "page": 3,
+          "quote": "The Contractor's total liability is limited to 100% of the Contract Price."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 3,
+          "quote": "The warranty period is 24 months from PAC."
+        },
+        {
+          "param_id": "CT-09",
+          "page": 3,
+          "quote": "Title to the Goods passes to the Buyer on delivery."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 4,
+          "quote": "This contract is governed by the laws of England and Wales."
+        },
+        {
+          "param_id": "CT-14",
+          "page": 4,
+          "quote": "Disputes shall be finally settled by ICC arbitration in London."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "Offer_cp-harlow_Harlow.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-16",
+          "page": 20,
+          "quote": "This offer is subject to the terms of the Framework Agreement dated 1 April 2025."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 20,
+          "quote": "The Contract Price is in EUR."
+        },
+        {
+          "param_id": "CT-12",
+          "page": 21,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 21,
+          "quote": "Liquidated damages of 0.5% of the Contract Price per week of delay, capped at 10% of the Contract Price."
+        },
+        {
+          "param_id": "CT-02",
+          "page": 21,
+          "quote": "The Supplier's total liability is limited to 100% of the Contract Price."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 21,
+          "quote": "The warranty period is 36 months from PAC."
+        },
+        {
+          "param_id": "CT-09",
+          "page": 21,
+          "quote": "Title to the Goods passes to the Buyer on delivery."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    },
+    "Offer_cp-kestrel_Kestrel.pdf": {
+      "page_sections": [],
+      "candidates": [
+        {
+          "param_id": "CT-16",
+          "page": 20,
+          "quote": "This offer is subject to the terms of the Framework Agreement dated 12 May 2025."
+        },
+        {
+          "param_id": "CT-13",
+          "page": 20,
+          "quote": "The Contract Price is in EUR."
+        },
+        {
+          "param_id": "CT-12",
+          "page": 21,
+          "quote": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        },
+        {
+          "param_id": "CT-01",
+          "page": 21,
+          "quote": "Liquidated damages of 0.5% of the Contract Price per week of delay, capped at 5% of the Contract Price."
+        },
+        {
+          "param_id": "CT-02",
+          "page": 21,
+          "quote": "The Supplier's total liability is limited to GBP 400,000."
+        },
+        {
+          "param_id": "CT-03",
+          "page": 21,
+          "quote": "The warranty period is 36 months from delivery."
+        }
+      ],
+      "tender_facts": [],
+      "headline_price": null,
+      "cover_claim": null
+    }
+  },
+  "contract": {
+    "FA_cp-harlow_FA-HES-2025-03.pdf": {
+      "CT-17": {
+        "page": 2,
+        "quotes": [
+          "In case of conflict, the documents prevail in the following order: (1) the Purchase Order; (2) the Framework Agreement; (3) the Technical Specification; (4) the Offer."
+        ],
+        "values": {
+          "order": "Purchase Order > Framework Agreement > Technical Specification > Offer"
+        }
+      },
+      "CT-12": {
+        "page": 3,
+        "quotes": [
+          "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        ],
+        "values": {
+          "incoterm": "DDP",
+          "named_place": "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        }
+      },
+      "CT-10": {
+        "page": 3,
+        "quotes": [
+          "The Buyer may issue the NTP within 8 months from the Project Purchase Order."
+        ],
+        "values": {
+          "ntp_deadline_months": "8"
+        }
+      },
+      "CT-01": {
+        "page": 3,
+        "quotes": [
+          "Liquidated damages of 0.5% of the Contract Price per week of delay.",
+          "Liquidated damages are capped at 10 % of the Contract Price.",
+          "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning."
+        ],
+        "values": {
+          "ld_rate": "0.5% per week",
+          "ld_cap": "10 %",
+          "ld_triggers": "delivery, cold commissioning, hot commissioning"
+        }
+      },
+      "CT-13": {
+        "page": 4,
+        "quotes": [
+          "The Contract Price is in EUR.",
+          "The price is fixed and firm from the issue of the Notice to Proceed.",
+          "The Contract Price is a fixed lump sum."
+        ],
+        "values": {
+          "price_currency": "EUR",
+          "price_fixed_after_ntp": "fixed after NTP",
+          "price_type": "fixed lump sum"
+        }
+      },
+      "CT-07": {
+        "page": 4,
+        "quotes": [
+          "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."
+        ],
+        "values": {
+          "milestones": "90% 30 days after delivery; 10% at PAC against warranty bond"
+        }
+      },
+      "CT-06": {
+        "page": 4,
+        "quotes": [
+          "The advance payment is made against an advance payment bond of 10%."
+        ],
+        "values": {
+          "advance_bond_pct": "10 %"
+        }
+      },
+      "CT-04": {
+        "page": 5,
+        "quotes": [
+          "The Supplier provides a warranty bond of 5% of the Contract Price.",
+          "The warranty bond is valid for 24 months."
+        ],
+        "values": {
+          "warranty_bond_pct": "5 %",
+          "warranty_bond_months": "24"
+        }
+      },
+      "CT-05": {
+        "page": 5,
+        "quotes": [
+          "A performance bond equal to ten percent (10%) of the Price.",
+          "The performance bond is released at Provisional Acceptance."
+        ],
+        "values": {
+          "performance_bond_pct": "10 %",
+          "performance_bond_release": "PAC"
+        }
+      },
+      "CT-15": {
+        "page": 5,
+        "quotes": [
+          "The Supplier holds credit insurance with Calder Mutual Credit Ltd.",
+          "The secured value under the credit insurance is EUR 2,000,000."
+        ],
+        "values": {
+          "credit_insurer": "Calder Mutual Credit Ltd",
+          "credit_secured_value": "EUR 2,000,000"
+        }
+      },
+      "CT-03": {
+        "page": 6,
+        "quotes": [
+          "The warranty period is 36 months from PAC.",
+          "Defective parts shall be repaired or replaced on site at the Seller's cost.",
+          "The warranty covers all components of the supply."
+        ],
+        "values": {
+          "warranty_months": "36",
+          "warranty_start": "PAC",
+          "warranty_on_site": "on site",
+          "warranty_coverage": "all components"
+        }
+      },
+      "CT-09": {
+        "page": 6,
+        "quotes": [
+          "Title to the Goods passes to the Buyer on delivery."
+        ],
+        "values": {
+          "title_event": "delivery"
+        }
+      },
+      "CT-02": {
+        "page": 6,
+        "quotes": [
+          "The Supplier's total liability is limited to 100% of the Contract Price."
+        ],
+        "values": {
+          "liability_cap": "100 %"
+        }
+      },
+      "CT-11": {
+        "page": 6,
+        "quotes": [
+          "The equipment has a minimum operating period of 35 years."
+        ],
+        "values": {
+          "design_life_months": "35 years (420 months)"
+        }
+      },
+      "CT-08": {
+        "page": 7,
+        "quotes": [
+          "The Buyer pays a termination fee of 5% of the price of the affected Goods."
+        ],
+        "values": {
+          "termination_fee_pct": "5 %"
+        }
+      },
+      "CT-14": {
+        "page": 7,
+        "quotes": [
+          "This contract is governed by the laws of England and Wales.",
+          "Disputes shall be finally settled by ICC arbitration in London."
+        ],
+        "values": {
+          "law": "English law",
+          "forum": "ICC arbitration"
+        }
+      }
+    },
+    "FA_cp-kestrel_FA-KPC-2025-07.pdf": {
+      "CT-17": {
+        "page": 2,
+        "quotes": [
+          "In case of conflict, the documents prevail in the following order: (1) the Purchase Order; (2) the Framework Agreement; (3) the Technical Specification; (4) the Offer."
+        ],
+        "values": {
+          "order": "Purchase Order > Framework Agreement > Technical Specification > Offer"
+        }
+      },
+      "CT-12": {
+        "page": 3,
+        "quotes": [
+          "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        ],
+        "values": {
+          "incoterm": "DDP",
+          "named_place": "Delivery DDP project site Brandenburg (Incoterms 2020)."
+        }
+      },
+      "CT-10": {
+        "page": 3,
+        "quotes": [
+          "The Buyer may issue the NTP within 8 months from the Project Purchase Order."
+        ],
+        "values": {
+          "ntp_deadline_months": "8"
+        }
+      },
+      "CT-01": {
+        "page": 3,
+        "quotes": [
+          "Liquidated damages of 0.5% of the Contract Price per week of delay.",
+          "Liquidated damages are capped at 10 % of the Contract Price.",
+          "LDs apply to late delivery and/or any late Cold Commissioning and/or Hot Commissioning."
+        ],
+        "values": {
+          "ld_rate": "0.5% per week",
+          "ld_cap": "10 %",
+          "ld_triggers": "delivery, cold commissioning, hot commissioning"
+        }
+      },
+      "CT-13": {
+        "page": 4,
+        "quotes": [
+          "The Contract Price is in EUR.",
+          "The price is fixed and firm from the issue of the Notice to Proceed.",
+          "The Contract Price is a fixed lump sum."
+        ],
+        "values": {
+          "price_currency": "EUR",
+          "price_fixed_after_ntp": "fixed after NTP",
+          "price_type": "fixed lump sum"
+        }
+      },
+      "CT-07": {
+        "page": 4,
+        "quotes": [
+          "Payment terms: 90% within thirty (30) days after delivery; 10% at PAC against a warranty bond."
+        ],
+        "values": {
+          "milestones": "90% 30 days after delivery; 10% at PAC against warranty bond"
+        }
+      },
+      "CT-06": {
+        "page": 4,
+        "quotes": [
+          "The advance payment is made against an advance payment bond of 10%."
+        ],
+        "values": {
+          "advance_bond_pct": "10 %"
+        }
+      },
+      "CT-04": {
+        "page": 5,
+        "quotes": [
+          "The Supplier provides a warranty bond of 5% of the Contract Price.",
+          "The warranty bond is valid for 24 months."
+        ],
+        "values": {
+          "warranty_bond_pct": "5 %",
+          "warranty_bond_months": "24"
+        }
+      },
+      "CT-05": {
+        "page": 5,
+        "quotes": [
+          "A performance bond equal to ten percent (10%) of the Price.",
+          "The performance bond is released at Provisional Acceptance."
+        ],
+        "values": {
+          "performance_bond_pct": "10 %",
+          "performance_bond_release": "PAC"
+        }
+      },
+      "CT-15": {
+        "page": 5,
+        "quotes": [
+          "The Supplier holds credit insurance with Fenwold Credit Assurance plc.",
+          "The secured value under the credit insurance is EUR 2,000,000."
+        ],
+        "values": {
+          "credit_insurer": "Fenwold Credit Assurance plc",
+          "credit_secured_value": "EUR 2,000,000"
+        }
+      },
+      "CT-03": {
+        "page": 6,
+        "quotes": [
+          "The warranty period is 60 months from PAC.",
+          "Defective parts shall be repaired or replaced on site at the Seller's cost.",
+          "The warranty covers all components of the supply."
+        ],
+        "values": {
+          "warranty_months": "60",
+          "warranty_start": "PAC",
+          "warranty_on_site": "on site",
+          "warranty_coverage": "all components"
+        }
+      },
+      "CT-09": {
+        "page": 6,
+        "quotes": [
+          "Title to the Goods passes to the Buyer on delivery."
+        ],
+        "values": {
+          "title_event": "delivery"
+        }
+      },
+      "CT-02": {
+        "page": 6,
+        "quotes": [
+          "The Supplier's total liability is limited to EUR 450,000."
+        ],
+        "values": {
+          "liability_cap_money": "EUR 450,000"
+        }
+      },
+      "CT-11": {
+        "page": 6,
+        "quotes": [
+          "The equipment has a minimum operating period of 35 years."
+        ],
+        "values": {
+          "design_life_months": "35 years (420 months)"
+        }
+      },
+      "CT-08": {
+        "page": 7,
+        "quotes": [
+          "The Buyer pays a termination fee of 5% of the price of the affected Goods."
+        ],
+        "values": {
+          "termination_fee_pct": "5 %"
+        }
+      },
+      "CT-14": {
+        "page": 7,
+        "quotes": [
+          "This contract is governed by the laws of England and Wales.",
+          "Disputes shall be finally settled by ICC arbitration in London."
+        ],
+        "values": {
+          "law": "English law",
+          "forum": "ICC arbitration"
+        }
+      }
+    },
+    "FA_cp-kestrel_FA-KPC-2025-07_Amendment-1.pdf": {
+      "CT-03": {
+        "page": 2,
+        "quotes": [
+          "The warranty period is 66 months from PAC."
+        ],
+        "values": {
+          "warranty_months": "66",
+          "warranty_start": "PAC"
+        }
+      }
+    },
+    "Owner-Contract-Excerpt.pdf": {
+      "CT-01": {
+        "page": 2,
+        "quotes": [
+          "Liquidated damages of 0.5% of the Contract Price per week of delay.",
+          "Liquidated damages are capped at 10 % of the Contract Price."
+        ],
+        "values": {
+          "ld_rate": "0.5% per week",
+          "ld_cap": "10 %"
+        }
+      },
+      "CT-02": {
+        "page": 3,
+        "quotes": [
+          "The Contractor's total liability is limited to 100% of the Contract Price."
+        ],
+        "values": {
+          "liability_cap": "100 %"
+        }
+      },
+      "CT-03": {
+        "page": 3,
+        "quotes": [
+          "The warranty period is 24 months from PAC."
+        ],
+        "values": {
+          "warranty_months": "24",
+          "warranty_start": "PAC"
+        }
+      },
+      "CT-09": {
+        "page": 3,
+        "quotes": [
+          "Title to the Goods passes to the Buyer on delivery."
+        ],
+        "values": {
+          "title_event": "delivery"
+        }
+      },
+      "CT-14": {
+        "page": 4,
+        "quotes": [
+          "This contract is governed by the laws of England and Wales.",
+          "Disputes shall be finally settled by ICC arbitration in London."
+        ],
+        "values": {
+          "law": "English law",
+          "forum": "ICC arbitration"
+        }
+      }
+    },
+    "Offer_cp-harlow_Harlow.pdf": {
+      "CT-16": {
+        "page": 20,
+        "quotes": [
+          "This offer is subject to the terms of the Framework Agreement dated 1 April 2025."
+        ],
+        "values": {
+          "fa_reference": "Framework Agreement dated 1 April 2025"
+        }
+      },
+      "CT-13": {
+        "page": 20,
+        "quotes": [
+          "The Contract Price is in EUR."
+        ],
+        "values": {
+          "price_currency": "EUR"
+        }
+      },
+      "CT-12": {
+        "page": 21,
+        "quotes": [
+          "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        ],
+        "values": {
+          "incoterm": "DDP",
+          "named_place": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        }
+      },
+      "CT-01": {
+        "page": 21,
+        "quotes": [
+          "Liquidated damages of 0.5% of the Contract Price per week of delay, capped at 10% of the Contract Price."
+        ],
+        "values": {
+          "ld_rate": "0.5% per week",
+          "ld_cap": "10 %"
+        }
+      },
+      "CT-02": {
+        "page": 21,
+        "quotes": [
+          "The Supplier's total liability is limited to 100% of the Contract Price."
+        ],
+        "values": {
+          "liability_cap": "100 %"
+        }
+      },
+      "CT-03": {
+        "page": 21,
+        "quotes": [
+          "The warranty period is 36 months from PAC."
+        ],
+        "values": {
+          "warranty_months": "36",
+          "warranty_start": "PAC"
+        }
+      },
+      "CT-09": {
+        "page": 21,
+        "quotes": [
+          "Title to the Goods passes to the Buyer on delivery."
+        ],
+        "values": {
+          "title_event": "delivery"
+        }
+      }
+    },
+    "Offer_cp-kestrel_Kestrel.pdf": {
+      "CT-16": {
+        "page": 20,
+        "quotes": [
+          "This offer is subject to the terms of the Framework Agreement dated 12 May 2025."
+        ],
+        "values": {
+          "fa_reference": "Framework Agreement dated 12 May 2025"
+        }
+      },
+      "CT-13": {
+        "page": 20,
+        "quotes": [
+          "The Contract Price is in EUR."
+        ],
+        "values": {
+          "price_currency": "EUR"
+        }
+      },
+      "CT-12": {
+        "page": 21,
+        "quotes": [
+          "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        ],
+        "values": {
+          "incoterm": "DDP",
+          "named_place": "Delivery DDP project site Brandenburg (Incoterms 2020) with a 36-month defect liability period."
+        }
+      },
+      "CT-01": {
+        "page": 21,
+        "quotes": [
+          "Liquidated damages of 0.5% of the Contract Price per week of delay, capped at 5% of the Contract Price."
+        ],
+        "values": {
+          "ld_rate": "0.5% per week",
+          "ld_cap": "5 %"
+        }
+      },
+      "CT-02": {
+        "page": 21,
+        "quotes": [
+          "The Supplier's total liability is limited to GBP 400,000."
+        ],
+        "values": {
+          "liability_cap_money": "GBP 400,000"
+        }
+      },
+      "CT-03": {
+        "page": 21,
+        "quotes": [
+          "The warranty period is 36 months from delivery."
+        ],
+        "values": {
+          "warranty_months": "36",
+          "warranty_start": "delivery"
+        }
+      }
+    }
+  }
+}

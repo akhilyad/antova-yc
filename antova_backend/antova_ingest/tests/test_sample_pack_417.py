@@ -69,7 +69,7 @@ def test_every_pack_is_byte_identical_and_committed(tmp_path, tender_id):
 
 
 def test_pack_registry():
-    assert sorted(PACKS) == ["TENDER-2026-402", "TENDER-2026-417", "TENDER-2026-418"]
+    assert sorted(PACKS) == ["TENDER-2026-402", "TENDER-2026-417", "TENDER-2026-418", "TENDER-2026-419"]
     assert PACKS["TENDER-2026-402"] is scenario
 
 
