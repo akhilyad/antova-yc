@@ -1,11 +1,15 @@
 """Approver rules: who must approve a contract, and which role may accept each finding."""
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 
 from antova_ingest.approvers import ApproverRules, Suggestion, load_rules, role_to_accept, suggest_approvers
 from antova_ingest.costs import ConfigError
+from antova_ingest.types import BaselineFx
+
+GBP_EUR = BaselineFx(from_currency="GBP", to_currency="EUR", rate=Decimal("1.17"), dated=date(2026, 11, 1))
 
 RULES = load_rules("default_v1")
 
@@ -17,9 +21,9 @@ def _finding(category="back_to_back", param_id="CT-01", amounts=(), currency="EU
             "message": "", "money": money, "gap": None, "citations": [], "evidence_hash": "x"}
 
 
-def _suggest(findings=(), variance=None, ntp=None, negotiated=None, currency="EUR"):
+def _suggest(findings=(), variance=None, ntp=None, negotiated=None, currency="EUR", fx=()):
     return suggest_approvers(RULES, findings=list(findings), budget_variance_pct=variance, signing_before_ntp=ntp,
-                             procurement_negotiated=negotiated, budget_currency=currency)
+                             procurement_negotiated=negotiated, budget_currency=currency, fx=fx)
 
 
 def _roles(suggestions):
@@ -65,12 +69,31 @@ def test_director_when_money_reaches_threshold():
     assert "business_director" not in _roles(_suggest([_finding(amounts=["99999.99", None])]))
 
 
-def test_money_in_another_currency_does_not_meet_threshold():
-    assert "business_director" not in _roles(_suggest([_finding(amounts=["250000.00"], currency="USD")]))
+def test_converted_amount_above_threshold():
+    got = _suggest([_finding(amounts=["90000.00"], currency="GBP")], fx=[GBP_EUR])
+    reason = _reason(got, "business_director")
+    assert reason.startswith("A finding carries GBP 90000.00 (= GBP 90,000 × 1.17 (2026-11-01, GBP→EUR) = EUR 105,300.00)")
+    assert reason.endswith(", at or over EUR 100000.")
 
 
-def test_unknown_budget_currency_does_not_meet_threshold():
-    assert "business_director" not in _roles(_suggest([_finding(amounts=["250000.00"])], currency=None))
+def test_converted_amount_below_threshold():
+    assert "business_director" not in _roles(_suggest([_finding(amounts=["80000.00"], currency="GBP")], fx=[GBP_EUR]))
+
+
+def test_unconvertible_amount_adds_director():
+    got = _suggest([_finding(amounts=["250.00"], currency="USD")], fx=[GBP_EUR])
+    assert _reason(got, "business_director") == (
+        "A finding carries USD 250.00 (no USD→EUR rate entered), which could not be compared with the "
+        "EUR 100000 threshold.")
+
+
+def test_no_budget_currency_adds_director_when_money_present():
+    got = _suggest([_finding(amounts=["10.00"])], currency=None)
+    assert _reason(got, "business_director") == (
+        "A finding carries EUR 10.00 (no budget currency given), which could not be compared with the "
+        "100000 threshold.")
+    assert "business_director" not in _roles(_suggest([_finding(amounts=[None])], currency=None))
+    assert "business_director" not in _roles(_suggest([], currency=None))
 
 
 def test_ct14_back_to_back_finding_requires_legal():

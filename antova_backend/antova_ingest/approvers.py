@@ -3,9 +3,10 @@
 The rules are data (antova_ingest/approver_rules/<name>.json, versioned like the rate tables);
 this module only reads and applies them. Every suggestion carries the reason it was made.
 
-Money against the director threshold is compared only in the budget currency (`budget_currency`).
-A finding amount in another currency, or with no amount, is never converted or guessed here: it
-does not meet the threshold. With no budget currency given, no amount meets it.
+Money against the director threshold is compared in the budget currency (`budget_currency`). An
+amount in another currency is converted with the buyer-entered rate (`fx`, contract_checks.fx_convert);
+a rate is never fetched or assumed. An amount that cannot be compared (no rate, no currency, or no
+budget currency given) adds business_director with a reason naming it (ruling R37).
 """
 
 import json
@@ -13,12 +14,15 @@ import os
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from collections.abc import Sequence
 from pathlib import Path
 
 from antova_auth import ROLES
 
+from .contract_checks import fx_convert
 from .contract_ontology import LEGAL_TERMS
 from .costs import ConfigError
+from .types import BaselineFx
 
 RULES_DIR = Path(__file__).parent / "approver_rules"
 RULES_PATTERN = r"[a-z0-9_]{1,64}"
@@ -94,18 +98,45 @@ def _amount(m: dict) -> Decimal | None:
         return None
 
 
-def _largest_in(findings: list[dict], currency: str | None) -> Decimal | None:
-    if currency is None:
-        return None
-    amounts = [a for f in findings for m in (f.get("money") or [])
-               if m.get("currency") == currency and (a := _amount(m)) is not None]
-    return max(amounts, default=None)
+def _money_reasons(findings: list[dict], currency: str | None, threshold: Decimal,
+                   fx: Sequence[BaselineFx]) -> list[str]:
+    """Director reasons from finding money (ruling R37): the largest amount at or over the threshold in the
+    budget currency (converted at the buyer rate when needed), and every amount that could not be compared."""
+    best: tuple[Decimal, str] | None = None
+    uncompared: list[str] = []
+    for f in findings:
+        for m in f.get("money") or []:
+            amount = _amount(m)
+            if amount is None:
+                continue
+            shown = f"{m.get('currency') or '(no currency)'} {amount}"
+            if currency is None:
+                uncompared.append(f"{shown} (no budget currency given)")
+                continue
+            if not m.get("currency"):
+                uncompared.append(f"{shown} (the amount has no currency)")
+                continue
+            converted = fx_convert(amount, m["currency"], currency, fx)
+            if converted.amount is None:
+                uncompared.append(f"{shown} ({converted.reason})")
+                continue
+            text = shown if m["currency"] == currency else f"{shown} (= {converted.formula})"
+            if converted.amount >= threshold and (best is None or converted.amount > best[0]):
+                best = (converted.amount, text)
+    out = []
+    if best is not None:
+        out.append(f"A finding carries {best[1]}, at or over {currency} {threshold}.")
+    if uncompared:
+        where = f"the {currency} {threshold}" if currency else f"the {threshold}"
+        out.append(f"A finding carries {'; '.join(uncompared)}, which could not be compared with {where} threshold.")
+    return out
 
 
 def suggest_approvers(rules: ApproverRules, *, findings: list[dict], budget_variance_pct: Decimal | None,
                       signing_before_ntp: bool | None, procurement_negotiated: bool | None,
-                      budget_currency: str | None = None) -> list[Suggestion]:
-    """The roles that must approve, in a stable order, each with why. An unknown flag (None) does not fire."""
+                      budget_currency: str | None = None, fx: Sequence[BaselineFx] = ()) -> list[Suggestion]:
+    """The roles that must approve, in a stable order, each with why. An unknown flag (None) does not fire;
+    finding money that cannot be compared with the threshold does (ruling R37)."""
     out = [Suggestion(r, "Always required for a contract approval.") for r in rules.always]
     if procurement_negotiated is True:
         out.append(Suggestion(rules.procurement_when_negotiated, "Procurement negotiated this contract."))
@@ -117,10 +148,7 @@ def suggest_approvers(rules: ApproverRules, *, findings: list[dict], budget_vari
         reasons.append("The contract is to be signed before notice to proceed.")
     if budget_variance_pct is not None and budget_variance_pct > 0:
         reasons.append(f"The contract is {budget_variance_pct}% over the frozen budget.")
-    largest = _largest_in(findings, budget_currency)
-    if largest is not None and largest >= rules.director_money_threshold:
-        reasons.append(f"A finding carries {budget_currency} {largest}, at or over "
-                       f"{budget_currency} {rules.director_money_threshold}.")
+    reasons += _money_reasons(findings, budget_currency, rules.director_money_threshold, fx)
     if reasons:
         out.append(Suggestion(rules.director_role, " ".join(reasons)))
     seen: set[str] = set()
