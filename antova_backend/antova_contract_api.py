@@ -10,6 +10,9 @@ The gate: GET .../contract shows the vendor's contract rows, verify moves the ga
 nothing is open (antova_review.contract_open_items) and withdraw reopens it. Contract cells are reviewed
 through the TBE review route with CT- param ids.
 
+The CAS: GET ./cas assembles the vendor's contract approval sheet (antova_cas.build_cas); PUT
+./cas/approvers/{role} records a suggested approver taken off it, with the reason and the reviewer from the token.
+
 Dispositions and gates never touch the tender's TBE status or its open items.
 """
 
@@ -27,7 +30,9 @@ from sqlalchemy.orm import Session
 
 from antova_auth import ROLES, ReviewerPrincipal, require_review_token
 from antova_briefs_api import not_found
-from antova_db import ContractGateRecord, FindingDispositionRecord, TenderRepository, fa_version, get_db
+import antova_cas
+from antova_db import (ApproverRemovalRecord, ContractGateRecord, CounterpartyRecord, FindingDispositionRecord,
+                       ProjectRecord, TenderRecord, TenderRepository, fa_version, get_db)
 from antova_ingest import approvers
 from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID, TBE_EQUIVALENT
 from antova_review import contract_cell_state, contract_open_items
@@ -266,3 +271,66 @@ def withdraw_contract(tender_id: str, vendor_id: str, db: Session = Depends(get_
     db.commit()
     log.info("contract gate withdrawn: tender=%s vendor=%s by=%s", tender_id, vendor_id, principal.id)
     return {"status": "DRAFT"}
+
+
+# --- the contract approval sheet ------------------------------------------------------------------
+
+class ApproverRemovalBody(BaseModel):
+    """Take a suggested approver off the sheet, with why. Who removed it comes from the token."""
+    removed: Literal[True]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+def _removals(db: Session, tender_id: str, vendor_id: str) -> list[dict]:
+    rows = (db.query(ApproverRemovalRecord).filter_by(tender_id=tender_id, vendor_id=vendor_id)
+            .order_by(ApproverRemovalRecord.id))
+    return [{"approver": r.approver, "reason": r.reason, "removed_by": r.removed_by,
+             "created_at": r.created_at.isoformat()} for r in rows]
+
+
+def _cas_inputs(db: Session, tender_id: str, vendor_id: str):
+    """The loaded tender and the stored contract inputs of the CAS. 404 for a tender without contract approval."""
+    from antova_briefs_api import load_tender
+
+    gate_row = _gate_row(_gate(db, tender_id, vendor_id))
+    gate_row["open_items"] = [asdict(i) for i in gate_open_items(db, tender_id, vendor_id)]
+    repo = TenderRepository(db)
+    loaded = load_tender(db, tender_id)
+    tender_record = db.get(TenderRecord, tender_id)
+    project = db.get(ProjectRecord, tender_record.project_id) if tender_record.project_id else None
+    counterparty_id = repo.vendor_counterparty(tender_id, vendor_id)
+    counterparty = db.get(CounterpartyRecord, counterparty_id) if counterparty_id else None
+    contract = {
+        "body": repo.contracted_body(tender_id), "terms": repo.contract_terms(tender_id, vendor_id),
+        "run": repo.get_run(tender_id), "gate": gate_row,
+        "project": {"name": project.name, "buyer_entity": project.buyer_entity} if project else None,
+        "counterparty": ({"legal_name": counterparty.legal_name, "parent_company": counterparty.parent_company}
+                         if counterparty else None),
+    }
+    return loaded, contract
+
+
+@router.get("/tenders/{tender_id}/vendors/{vendor_id}/cas", dependencies=[Depends(_known_vendor)])
+def get_cas(tender_id: str, vendor_id: str, db: Session = Depends(get_db)):
+    """The vendor's contract approval sheet, assembled in code from what is stored."""
+    loaded, contract = _cas_inputs(db, tender_id, vendor_id)
+    dispositions = {row["finding_id"]: row for row in latest_dispositions(db, tender_id, vendor_id)}
+    return antova_cas.build_cas(loaded, vendor_id, contract=contract, dispositions=dispositions,
+                                rules=approvers.load_rules(), removals=_removals(db, tender_id, vendor_id))
+
+
+@router.put("/tenders/{tender_id}/vendors/{vendor_id}/cas/approvers/{role}", dependencies=[Depends(_known_vendor)])
+def remove_approver(tender_id: str, vendor_id: str, role: str, body: ApproverRemovalBody,
+                    db: Session = Depends(get_db), principal: ReviewerPrincipal = Depends(require_review_token)):
+    """Record that a suggested approver is taken off the sheet, with the reason and the reviewer."""
+    contract_gate_open(tender_id, vendor_id, db)
+    loaded, contract = _cas_inputs(db, tender_id, vendor_id)
+    if role not in antova_cas.suggested_roles(loaded, vendor_id, contract=contract, rules=approvers.load_rules()):
+        raise HTTPException(status_code=422, detail=f"{role} is not a suggested approver for this vendor.")
+    record = ApproverRemovalRecord(tender_id=tender_id, vendor_id=vendor_id, approver=role, reason=body.reason,
+                                   removed_by=principal.id, created_at=datetime.now(timezone.utc))
+    db.add(record)
+    db.commit()
+    log.info("approver removed: tender=%s vendor=%s role=%s by=%s", tender_id, vendor_id, role, principal.id)
+    return {"approver": role, "reason": record.reason, "removed_by": record.removed_by,
+            "created_at": record.created_at.isoformat()}
