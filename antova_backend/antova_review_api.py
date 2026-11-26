@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
 from antova_auth import ReviewerPrincipal, require_review_token
+from antova_contract_api import latest_dispositions
 from antova_briefs_api import (
     LoadedTender, RatesBody, brief, evaluate, evidence_png, load_tender, not_found,
 )
@@ -181,15 +182,27 @@ def put_review(tender_id: str, param_id: str, vendor_id: str, body: ReviewBody,
     return {**row, "created_at": row["created_at"].isoformat(), "state": review_state(cell, row)}
 
 
-def _clarification_rows(loaded: LoadedTender, vendor: str | None) -> list[dict]:
-    """The clarification questions, for one vendor when `vendor` is given (404 if it is not in the tender).
+def _clarification_rows(db: Session, loaded: LoadedTender, vendor: str | None) -> list[dict]:
+    """The clarification questions, for one vendor when `vendor` is given (404 if it is not in the tender),
+    then each vendor's negotiation questions (findings a reviewer marked `negotiate`).
 
     A vendor's rows quote only its own bid and the buyer's requirement: no other bidder's name, price or
-    citation, so one vendor's file can be sent to that vendor as it is.
+    citation, so one vendor's file can be sent to that vendor as it is. Negotiation rows cite only the
+    vendor's own documents and the framework agreement, never the owner contract.
     """
     if vendor is not None and vendor not in {v.id for v in loaded.tender.vendors}:
         raise not_found()
     rows = clarify.clarifications(loaded.tender)
+    tender_id = loaded.tender.id
+    findings = TenderRepository(db).contract_findings(tender_id)
+    documents = TenderRepository(db).list_documents(tender_id)
+    names = {v.id: v.name for v in loaded.tender.vendors}
+    for v in loaded.tender.vendors:
+        shareable = {d["filename"] for d in documents
+                     if d["vendor_id"] == v.id or d["role"] == "framework_agreement"}
+        rows += clarify.contract_rows([f for f in findings if f.get("vendor_id") == v.id],
+                                      latest_dispositions(db, tender_id, v.id), tender_id=tender_id,
+                                      vendor_names=names, shareable_files=shareable)
     return rows if vendor is None else [r for r in rows if r["vendor_id"] == vendor]
 
 
@@ -205,7 +218,7 @@ def clarifications_csv(tender_id: str, vendor: Annotated[str | None, Query(max_l
     `?vendor=<id>` limits it to one vendor, ready to send to them."""
     loaded = _loaded(db, tender_id)
     suffix = f"_{vendor}" if vendor else ""
-    return _attachment(clarify.to_csv(_clarification_rows(loaded, vendor)), "text/csv; charset=utf-8",
+    return _attachment(clarify.to_csv(_clarification_rows(db, loaded, vendor)), "text/csv; charset=utf-8",
                        f"Clarifications_{tender_id}{suffix}.csv")
 
 
@@ -215,7 +228,7 @@ def clarifications_xlsx_route(tender_id: str, vendor: Annotated[str | None, Quer
     """The same register as a spreadsheet."""
     loaded = _loaded(db, tender_id)
     suffix = f"_{vendor}" if vendor else ""
-    return _attachment(clarifications_xlsx(_clarification_rows(loaded, vendor)), XLSX_TYPE,
+    return _attachment(clarifications_xlsx(_clarification_rows(db, loaded, vendor)), XLSX_TYPE,
                        f"Clarifications_{tender_id}{suffix}.xlsx")
 
 
