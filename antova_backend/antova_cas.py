@@ -36,6 +36,8 @@ RISK_GROUPS = ("technical", "fa_conformance", "back_to_back", "budget", "missing
 NOT_KNOWN = "not known"
 NOT_STATED = "not stated in the offer"
 BUYER_ENTERED = "entered by the buyer"
+CONFLICT_CODES = frozenset({"passages_disagree", "amendment_order_unknown"})
+ENGINEERING = "engineering"
 _TBE_RISK = {ComplianceStatus.DEVIATION_DOWNGRADE.value, ComplianceStatus.CONFLICT_DOWNGRADE.value,
              ComplianceStatus.OMITTED.value, ComplianceStatus.MANUAL_INSPECTION_REQUIRED.value}
 
@@ -44,10 +46,13 @@ def _field(label: str, state: str, display: str | None = None, *, citations: Ite
            formula: str = "", reason: str = "") -> dict:
     if state not in STATES:
         raise ValueError(f"unknown CAS field state {state!r}")
+    if state != "missing" and (display is None or not str(display).strip()):
+        # A cited, computed or inherited field always shows its value; without one it is not known.
+        state, reason = "missing", f"the stored {state} value has no text to show"
     if state == "missing":
         return {"label": label, "state": state, "display": NOT_KNOWN, "citations": list(citations),
                 "formula": "", "reason": reason or NOT_KNOWN}
-    return {"label": label, "state": state, "display": display if display not in (None, "") else NOT_KNOWN,
+    return {"label": label, "state": state, "display": str(display),
             "citations": list(citations), "formula": formula, "reason": ""}
 
 
@@ -68,7 +73,9 @@ class _Terms:
 
     def __init__(self, terms: list[dict], documents: list[dict]):
         self.by_id = {t["param_id"]: t for t in terms}
-        self.fa_files = {d["filename"] for d in documents if d.get("role") == "framework_agreement"}
+        # The FA's files: those the manifest names, and those the terms' FA sides cite.
+        self.fa_files = {d["filename"] for d in documents if d.get("role") == "framework_agreement"} | {
+            c.get("filename") for t in terms for c in ((t.get("fa") or {}).get("citations") or [])}
         incorporation = self.by_id.get("CT-16", {}).get("offered") or {}
         self.incorporation = [c for c in incorporation.get("citations") or [] if c.get("filename") not in self.fa_files]
 
@@ -85,22 +92,28 @@ class _Terms:
             return _missing(label, f"{param.name} was not assessed for this vendor")
         side = term.get(source)
         value = (side or {}).get("values", {}).get(name)
+        where = {"offered": "the offer", "fa": "the framework agreement", "owner": "the owner contract"}[source]
+        conflict = next((f for f in term.get("flags") or [] if f.get("code") in CONFLICT_CODES
+                         and f.get("source") == source and f.get("field") == name), None)  # R27: field and source
+        if conflict is not None:
+            return _missing(label, f"the documents of {where} disagree on this field; resolve the conflict in the "
+                                   f"contract review. {conflict.get('message', '')}".strip())
         if value is None:
-            if source == "offered" and term.get("state") == "conflict":
-                return _missing(label, "the documents disagree on this term; resolve the conflict in the contract "
-                                       "review")
-            return _missing(label, NOT_STATED if source == "offered" else
-                            f"not stated in the {'framework agreement' if source == 'fa' else 'owner contract'}")
+            return _missing(label, NOT_STATED if source == "offered" else f"not stated in {where}")
         display = value["value"] if name in CITATION_ONLY and isinstance(value.get("value"), str) else value["display"]
         if side["kind"] == "buyer_entered":
             return _field(label, "computed", display, formula=BUYER_ENTERED)
         citations = list(side.get("citations") or [])
         if name in set(side.get("inherited_fields") or ()):
             inherited = self._inherited_citations(citations) if side["kind"] != "inherited" else citations
+            if len(inherited) < 2 or not any(c.get("filename") in self.fa_files for c in inherited):
+                return _missing(label, "inherited from the framework agreement, but the incorporation clause and "
+                                       "the agreement's clause are not both cited", inherited)
             return _field(label, "inherited", display, citations=inherited)
         if source == "offered":
-            own = [c for c in citations if c not in self._inherited_citations(citations)]
-            citations = own or citations
+            citations = [c for c in citations if c not in self._inherited_citations(citations)]
+        if not citations:
+            return _missing(label, f"{where} states this field, but its own citation is not stored")
         return _field(label, "cited", display, citations=citations)
 
     def fields(self, param_id: str, source: str = "offered", prefix: str = "") -> dict:
@@ -276,16 +289,20 @@ def _vendor_cells(loaded, vendor_id: str):
             yield param, cell, status
 
 
+def _technical_open(loaded, vendor_id: str) -> int:
+    """The vendor's open TBE items (unpriced, to inspect, unreviewed flags)."""
+    return sum(1 for i in open_items(loaded.tender, loaded.overrides, loaded.reviews) if i.vendor_id == vendor_id)
+
+
 def _technical(loaded, vendor_id: str) -> dict:
     cells = list(_vendor_cells(loaded, vendor_id))
     deviations = sum(1 for _, _, s in cells if s == ComplianceStatus.DEVIATION_DOWNGRADE.value)
-    items = [i for i in open_items(loaded.tender, loaded.overrides, loaded.reviews) if i.vendor_id == vendor_id]
     link = f"/audit/{loaded.meta.tender_id}"
     return {
         "status": _field("TBE status", "computed", loaded.meta.status, formula="the tender's TBE review status"),
         "deviations": _field("Deviations", "computed", str(deviations),
                              formula=f"cells of this vendor with status {ComplianceStatus.DEVIATION_DOWNGRADE.value}"),
-        "open_items": _field("Open items", "computed", str(len(items)),
+        "open_items": _field("Open items", "computed", str(_technical_open(loaded, vendor_id)),
                              formula="the TBE open items of this vendor (unpriced, to inspect, unreviewed flags)"),
         "link": _field("Full evaluation", "computed", link, formula="the technical bid evaluation of this tender"),
     }
@@ -303,7 +320,9 @@ def _risks(loaded, vendor_id: str, findings: list[dict], dispositions: Mapping[s
             "citations": [cell.citation] if cell.citation else []})
     for finding in findings:
         row = dispositions.get(finding["id"])
-        groups.setdefault(finding["category"], []).append({
+        if finding["category"] not in groups:
+            raise ValueError(f"finding {finding['id']!r} has unknown category {finding['category']!r}")
+        groups[finding["category"]].append({
             "finding_id": finding["id"], "category": finding["category"], "message": finding["message"],
             "money": finding.get("money") or [], "gap": finding.get("gap"),
             "disposition": row["disposition"] if row else None,
@@ -322,7 +341,7 @@ def _variance_pct(body: dict, vendor_id: str, project: ProjectBaseline) -> Decim
 
 
 def _approvers(rules, findings: list[dict], body: dict, vendor_id: str, project: ProjectBaseline,
-               removals: list[dict]) -> dict:
+               removals: list[dict], technical_open: int = 0) -> dict:
     suggestions = approver_rules.suggest_approvers(
         rules, findings=findings, budget_variance_pct=_variance_pct(body, vendor_id, project),
         signing_before_ntp=project.signing_before_ntp, procurement_negotiated=project.procurement_negotiated,
@@ -331,10 +350,13 @@ def _approvers(rules, findings: list[dict], body: dict, vendor_id: str, project:
     suggested, removed = [], []
     for s in suggestions:
         removal = removed_by_role.get(s.role)
+        reason = s.reason
+        if s.role == ENGINEERING and technical_open:  # spec 4.6: blocked while technical items are open
+            reason = f"{reason} Blocked: {technical_open} technical item{'s' if technical_open != 1 else ''} open."
         if removal is None:
-            suggested.append({"role": s.role, "reason": s.reason})
+            suggested.append({"role": s.role, "reason": reason})
         else:
-            removed.append({"role": s.role, "suggestion_reason": s.reason, "reason": removal["reason"],
+            removed.append({"role": s.role, "suggestion_reason": reason, "reason": removal["reason"],
                             "removed_by": removal["removed_by"], "removed_at": removal["created_at"]})
     return {"rules": f"{rules.name} v{rules.version}", "suggested": suggested, "removed": removed}
 
@@ -391,6 +413,7 @@ def build_cas(loaded, vendor_id: str, *, contract: dict, dispositions: dict, rul
         "warranty": _warranty(body, vendor_id, terms),
         "risks": _risks(loaded, vendor_id, findings, dispositions),
         "technical": _technical(loaded, vendor_id),
-        "approvers": _approvers(rules, findings, body, vendor_id, project, removals),
+        "approvers": _approvers(rules, findings, body, vendor_id, project, removals,
+                                _technical_open(loaded, vendor_id)),
         "meta": _meta(loaded, contract, findings, dispositions),
     }

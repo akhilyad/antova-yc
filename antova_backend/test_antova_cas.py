@@ -273,3 +273,89 @@ def test_schedule_float_is_missing_without_a_required_on_site_date(tender_418):
 def test_no_lead_time_cell_is_missing(cas):
     assert cas["delivery"]["lead_time"]["state"] == "missing"  # TENDER-2026-402 has no PARAM-09
     assert cas["delivery"]["schedule_float"]["reason"] == "no lead time to schedule from"
+
+
+# --- review round 1: conflicts per source, integrity of each field -------------------------------------------
+
+from antova_cas import _field, _risks  # noqa: E402
+
+OWNER_DOC = DocumentEntry(file="owner-velmar.pdf", role="owner_contract")
+LAW_EW = "This Agreement is governed by the laws of England and Wales."
+LAW_SE = "This Agreement is governed by the laws of Sweden."
+
+
+def _terms_of(evidence_by_file, *docs):
+    manifest = TenderManifest(tender_id="T-1", title="t", client="c", equipment_class="mv_gis_switchgear",
+                              rate_table="mv_gis_switchgear_v2", documents=[MR, BID, *docs],
+                              engineering_estimates={}, synthetic=True)
+    body = assess(manifest, {BID.file: [], **evidence_by_file}, {}, {})
+    return _Terms([t for t in body["terms"] if t["vendor_id"] == "vendor-b"], [])
+
+
+def test_an_fa_conflict_on_law_is_a_conflict_not_silence():
+    terms = _terms_of({FA.file: [_ev(FA.file, "CT-14", LAW_EW, 3), _ev(FA.file, "CT-14", LAW_SE, 8)]}, FA)
+    field = terms.field("CT-14", "law", "fa")
+    assert field["state"] == "missing"
+    assert field["reason"].startswith("the documents of the framework agreement disagree on this field")
+    assert terms.field("CT-14", "forum", "fa")["reason"] == "not stated in the framework agreement"
+
+
+def test_an_owner_contract_conflict_is_a_conflict_not_silence():
+    terms = _terms_of({OWNER_DOC.file: [_ev(OWNER_DOC.file, "CT-14", LAW_EW, 3),
+                                        _ev(OWNER_DOC.file, "CT-14", LAW_SE, 8)]}, OWNER_DOC)
+    assert terms.field("CT-14", "law", "owner")["reason"].startswith(
+        "the documents of the owner contract disagree on this field")
+
+
+def test_an_offered_field_silent_beside_a_conflicting_field_is_not_stated():
+    terms = _terms_of({BID.file: [_ev(BID.file, "CT-14", LAW_EW, 3), _ev(BID.file, "CT-14", LAW_SE, 8)]})
+    assert terms.field("CT-14", "law")["reason"].startswith("the documents of the offer disagree on this field")
+    assert terms.field("CT-14", "forum")["reason"] == "not stated in the offer"
+
+
+@pytest.mark.parametrize("state", ["cited", "computed", "inherited"])
+@pytest.mark.parametrize("display", [None, "", "  "])
+def test_a_non_missing_field_without_a_display_becomes_missing(state, display):
+    field = _field("Lead time", state, display, citations=[{"filename": "x.pdf"}], formula="f")
+    assert (field["state"], field["display"]) == ("missing", "not known") and field["reason"]
+
+
+def _citation(filename, quote):
+    return {"filename": filename, "page": 1, "bbox": [0, 0, 1, 1], "quote": quote, "section": "commercial",
+            "paragraph": "", "match": "exact", "rects": []}
+
+
+def _warranty_term(offered_citations, inherited_fields=("warranty_months",), kind="inherited"):
+    value = {"kind": "months", "value": 24, "display": "24", "qualifier": "delivery"}
+    return {"param_id": "CT-03", "vendor_id": "vendor-b", "state": "inherited", "flags": [], "fa": None,
+            "owner": None, "offered": {"kind": kind, "values": {"warranty_months": value},
+                                       "citations": offered_citations, "inherited_fields": list(inherited_fields)}}
+
+
+def test_an_inherited_field_with_one_citation_is_missing():
+    terms = _Terms([_warranty_term([_citation(FA.file, FA_WARRANTY)])],
+                   [{"filename": FA.file, "role": "framework_agreement"}])
+    field = terms.field("CT-03", "warranty_months")
+    assert field["state"] == "missing" and "not both cited" in field["reason"]
+
+
+def test_a_cited_field_with_only_fa_citations_is_missing():
+    term = _warranty_term([_citation(FA.file, FA_WARRANTY)], inherited_fields=(), kind="document")
+    terms = _Terms([term], [{"filename": FA.file, "role": "framework_agreement"}])
+    field = terms.field("CT-03", "warranty_months")
+    assert field["state"] == "missing" and field["reason"] == (
+        "the offer states this field, but its own citation is not stored")
+
+
+def test_engineering_is_blocked_while_technical_items_are_open(cas):
+    count = int(cas["technical"]["open_items"]["display"])
+    assert count > 0
+    (engineering,) = [s for s in cas["approvers"]["suggested"] if s["role"] == "engineering"]
+    assert engineering["reason"].endswith(f"Blocked: {count} technical item{'s' if count != 1 else ''} open.")
+
+
+def test_an_unknown_finding_category_fails_loudly(tender_418):
+    loaded = SimpleNamespace(tender=tender_418, reviews={})
+    finding = {"id": "f1", "category": "a-new-category", "message": "m", "money": [], "gap": None, "citations": []}
+    with pytest.raises(ValueError, match="unknown category"):
+        _risks(loaded, "vendor-b", [finding], {})
