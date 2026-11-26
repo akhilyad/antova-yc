@@ -151,3 +151,57 @@ def test_route_bad_header_and_encoding(client):
     response = client.post(ROUTE, files={"file": ("h.csv", b"\xff\xfe\x00bad", "text/csv")},
                            headers={REVIEW_HEADER: "tok-procurement"})
     assert response.status_code == 422
+
+
+# --- review round 1 -----------------------------------------------------------------------------------------
+
+def test_even_count_median_and_no_capacity_counted(db):
+    import_csv(db, _csv(_row(price="11000000"), _row(project="B", price="12000000"),
+                        _row(project="C", price="13000000"), _row(project="E", price="14000000"),
+                        _row(project="N", capacity_mwp="", capacity_mva="5")), "pia")
+    comparison = _compare(db)
+    assert comparison["median"] == D("1.25") and comparison["count"] == 4
+    assert comparison["excluded_no_capacity"] == 1
+
+
+def test_bom_header_blank_line_and_wrong_column_count(db):
+    result = import_csv(db, "\ufeff" + HEADER + "\n" + _row() + "\n\n" + "a,b,c\n", "pia")
+    assert result.imported == 1
+    assert result.rejected == [{"line": 4, "reason": "expected 11 columns, found 3"}]
+
+
+@pytest.mark.parametrize("price,word", [("0", "greater than 0"), ("-5", "greater than 0"),
+                                        ("1E+15", "too large"), ("Infinity", "not a number"), ("NaN", "not a number")])
+def test_bad_prices_rejected(db, price, word):
+    result = import_csv(db, _csv(_row(price=price)), "pia")
+    assert result.imported == 0 and word in result.rejected[0]["reason"]
+
+
+def test_long_cells_and_formula_injection_rejected(db):
+    result = import_csv(db, _csv(_row(project="P" * 256), _row(equipment="E" * 129), _row(project="=HYPERLINK(1)"),
+                                 _row(project="@cmd"), _row()), "pia")
+    assert result.imported == 1
+    reasons = [r["reason"] for r in result.rejected]
+    assert "longer than 255" in reasons[0] and "longer than 128" in reasons[1]
+    assert all("must not start with" in r for r in reasons[2:])
+
+
+def test_row_cap(db, monkeypatch):
+    from antova_ingest import price_history
+    from antova_ingest.price_history import TooManyRows
+    monkeypatch.setattr(price_history, "MAX_ROWS", 2)
+    with pytest.raises(TooManyRows):
+        import_csv(db, _csv(_row(), _row(), _row()), "pia")
+    assert db.query(PriceHistoryRecord).count() == 0
+
+
+def test_route_size_and_row_caps(client, db, monkeypatch):
+    import antova_contract_api
+    from antova_ingest import price_history
+    monkeypatch.setattr(antova_contract_api, "PRICE_HISTORY_MAX_BYTES", 100)
+    assert _post(client, _csv(_row(), _row())).status_code == 413
+    monkeypatch.setattr(antova_contract_api, "PRICE_HISTORY_MAX_BYTES", 5 * 1024 * 1024)
+    monkeypatch.setattr(price_history, "MAX_ROWS", 1)
+    response = _post(client, _csv(_row(), _row()))
+    assert response.status_code == 413 and "more than" in response.json()["detail"]
+    assert db.query(PriceHistoryRecord).count() == 0

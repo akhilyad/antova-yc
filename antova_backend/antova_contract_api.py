@@ -21,7 +21,7 @@ documents and evidence across every tender (antova_ingest.retention.delete_count
 Price history: POST /price-history (multipart CSV, field `file`) imports the buyer's past offers
 (antova_ingest.price_history) and returns {"imported", "rejected": [{"line", "reason"}]}. It needs the procurement
 role (prices are procurement's data, as accepting a commercial finding is), or the founder; a wrong header or a
-file that is not UTF-8 is 422 and imports nothing.
+file that is not UTF-8 is 422; over 5 MB or MAX_ROWS rows is 413; either imports nothing.
 """
 
 from __future__ import annotations
@@ -331,11 +331,12 @@ def _cas_inputs(db: Session, tender_id: str, vendor_id: str):
     project = db.get(ProjectRecord, tender_record.project_id) if tender_record.project_id else None
     counterparty_id = repo.vendor_counterparty(tender_id, vendor_id)
     counterparty = db.get(CounterpartyRecord, counterparty_id) if counterparty_id else None
+    body = repo.contracted_body(tender_id)
     contract = {
-        "body": repo.contracted_body(tender_id), "terms": repo.contract_terms(tender_id, vendor_id),
+        "body": body, "terms": repo.contract_terms(tender_id, vendor_id),
         "run": repo.get_run(tender_id), "gate": gate_row,
         "project": {"name": project.name, "buyer_entity": project.buyer_entity} if project else None,
-        "price_history": _price_history(db, loaded, repo.contracted_body(tender_id), vendor_id),
+        "price_history": _price_history(db, loaded, body, vendor_id),
         "counterparty": ({"legal_name": counterparty.legal_name, "parent_company": counterparty.parent_company}
                          if counterparty else None),
     }
@@ -431,6 +432,7 @@ def delete_counterparty(counterparty_id: str, db: Session = Depends(get_db),
 # --- price history --------------------------------------------------------------------------------------
 
 PRICE_HISTORY_ROLE = "procurement"
+PRICE_HISTORY_MAX_BYTES = 5 * 1024 * 1024
 
 
 @router.post("/price-history")
@@ -441,13 +443,19 @@ def import_price_history(file: UploadFile = File(...), db: Session = Depends(get
         raise HTTPException(status_code=403,
                             detail=f"Importing price history needs the {PRICE_HISTORY_ROLE} role.")
     try:
-        content = file.file.read().decode("utf-8")
+        raw = file.file.read(PRICE_HISTORY_MAX_BYTES + 1)
+        if len(raw) > PRICE_HISTORY_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"The price history file is larger than "
+                                                        f"{PRICE_HISTORY_MAX_BYTES // (1024 * 1024)} MB.")
+        content = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="The price history file must be UTF-8 text.") from None
     try:
         result = price_history.import_csv(db, content, principal.id)
     except price_history.HeaderError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except price_history.TooManyRows as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from None
     log.info("price history imported: rows=%d rejected=%d by=%s", result.imported, len(result.rejected),
              principal.id)
     return {"imported": result.imported, "rejected": result.rejected}

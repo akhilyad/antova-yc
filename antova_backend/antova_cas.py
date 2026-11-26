@@ -232,18 +232,23 @@ def _history(history: Mapping | None) -> dict:
     if not comparison:
         return _missing(label, (history or {}).get("reason") or "fewer than 3 comparable past offers")
     unit, currency = comparison["unit"], comparison["currency"]
-    places = Decimal("0.0001")
-    value, mid = Decimal(comparison["value"]), Decimal(comparison["median"])
-    delta = Decimal(comparison["delta_pct"]).quantize(Decimal("0.1"))
-    display = (f"{currency} {value.quantize(places)}/{unit} vs median {currency} {mid.quantize(places)}/{unit} "
-               f"({delta:+}%)")
-    listed = "; ".join(f"{r['project']} {r['offer_date']} {currency} {Decimal(r['unit_price']).quantize(places)}/{unit}"
+    def q(raw, places="0.0001") -> str:
+        return f"{Decimal(raw):.{len(places) - 2}f}"  # formatting never raises InvalidOperation like quantize
+
+    value, mid = q(comparison["value"]), q(comparison["median"])
+    delta = q(comparison["delta_pct"], "0.1")
+    delta = delta if delta.startswith("-") else f"+{delta}"
+    display = (f"{currency} {value}/{unit} vs median {currency} {mid}/{unit} "
+               f"({delta}%)")
+    listed = "; ".join(f"{r['project']} {r['offer_date']} {currency} {q(r['unit_price'])}/{unit}"
                        for r in comparison["rows"])
     window = comparison["window"]
     formula = (f"offered price / project capacity, against the median of {comparison['count']} past offers of the "
                f"same equipment in {currency}, {window['from']} to {window['to']}: {listed}")
     if comparison["excluded_other_currency"]:
         formula += f"; {comparison['excluded_other_currency']} in another currency excluded"
+    if comparison.get("excluded_no_capacity"):
+        formula += f"; {comparison['excluded_no_capacity']} without a capacity in {unit} excluded"
     return _field(label, "computed", display, formula=formula)
 
 

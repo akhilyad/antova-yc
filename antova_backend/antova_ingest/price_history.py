@@ -39,8 +39,20 @@ BASIS_UNITS = {"per_wp": ("capacity_mwp", Decimal(1_000_000), "Wp"),
                "per_kva": ("capacity_mva", Decimal(1_000), "kVA")}
 
 
+MAX_ROWS = 50_000
+MAX_PRICE = Decimal("1E+12")
+# Column widths of price_history; a longer cell is a rejected line, not a database error.
+WIDTHS = {"project": 255, "country": 64, "equipment": 128, "manufacturer": 255, "capacity_mwp": 32,
+          "capacity_mva": 32, "dc_ac_ratio": 32, "price": 32}
+_FORMULA_START = ("=", "+", "-", "@")
+
+
 class HeaderError(ValueError):
     """The CSV header is not exactly CSV_COLUMNS."""
+
+
+class TooManyRows(ValueError):
+    """The CSV has more than MAX_ROWS data rows."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,8 @@ def _decimal(raw: str, name: str, *, required: bool = False, positive: bool = Fa
         raise ValueError(f"{name} {raw!r} is not a number")
     if positive and value <= 0:
         raise ValueError(f"{name} must be greater than 0")
+    if abs(value) >= MAX_PRICE:
+        raise ValueError(f"{name} {raw!r} is too large")
     return value
 
 
@@ -80,6 +94,12 @@ def _option_lines(raw: str) -> list[dict]:
 
 
 def _parse_row(row: dict) -> dict:
+    for name, width in WIDTHS.items():
+        if len(row[name].strip()) > width:
+            raise ValueError(f"{name} is longer than {width} characters")
+    for name in ("project", "equipment", "manufacturer"):
+        if row[name].strip().startswith(_FORMULA_START):
+            raise ValueError(f"{name} must not start with = + - or @")
     project = row["project"].strip()
     equipment = row["equipment"].strip()
     if not project:
@@ -109,11 +129,14 @@ def import_csv(db: Session, content: str, imported_by: str) -> ImportResult:
     if header is None or tuple(h.strip() for h in header) != CSV_COLUMNS:
         raise HeaderError(f"the CSV header must be exactly: {','.join(CSV_COLUMNS)}")
     now = datetime.now(timezone.utc)
-    imported, rejected = 0, []
+    imported, rejected, pending = 0, [], []
     for cells in reader:
         line = reader.line_num
         if not any(c.strip() for c in cells):
             continue
+        if imported + len(rejected) >= MAX_ROWS:
+            db.rollback()
+            raise TooManyRows(f"the CSV has more than {MAX_ROWS:,} rows; split it into smaller files")
         if len(cells) != len(CSV_COLUMNS):
             rejected.append({"line": line, "reason": f"expected {len(CSV_COLUMNS)} columns, found {len(cells)}"})
             continue
@@ -122,8 +145,9 @@ def import_csv(db: Session, content: str, imported_by: str) -> ImportResult:
         except ValueError as exc:
             rejected.append({"line": line, "reason": str(exc)})
             continue
-        db.add(PriceHistoryRecord(**fields, imported_at=now, imported_by=imported_by))
+        pending.append(PriceHistoryRecord(**fields, imported_at=now, imported_by=imported_by))
         imported += 1
+    db.add_all(pending)
     db.commit()
     return ImportResult(imported, rejected)
 
@@ -169,14 +193,17 @@ def price_comparison(db: Session, *, equipment: str, basis: Literal["per_wp", "p
     current = _quarter_index(offer_date)
     first, last = current - QUARTERS, current - 1
     key = equipment.strip().lower()
-    rows, other_currency = [], 0
+    rows, other_currency, no_capacity = [], 0, 0
     for record in db.query(PriceHistoryRecord).order_by(PriceHistoryRecord.offer_date, PriceHistoryRecord.id):
         if record.equipment.strip().lower() != key or record.offer_date is None:
             continue
         if not first <= _quarter_index(record.offer_date) <= last:
             continue
         capacity = getattr(record, capacity_column)
-        if record.price is None or capacity is None:
+        if record.price is None:
+            continue
+        if capacity is None:
+            no_capacity += 1
             continue
         if (record.currency or "").upper() != currency.upper():
             other_currency += 1
@@ -189,5 +216,6 @@ def price_comparison(db: Session, *, equipment: str, basis: Literal["per_wp", "p
     mid = median(r["unit_price"] for r in rows)  # Decimal in, Decimal out
     return {"basis": basis, "unit": BASIS_UNITS[basis][2], "currency": currency.upper(), "value": value,
             "median": mid, "count": len(rows), "excluded_other_currency": other_currency,
+            "excluded_no_capacity": no_capacity,
             "delta_pct": (value - mid) / mid * 100,
             "window": {"from": _quarter_label(first), "to": _quarter_label(last)}, "rows": rows}
