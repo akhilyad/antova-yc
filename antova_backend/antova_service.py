@@ -20,6 +20,8 @@ def persist(result: IngestResult, db: Session, share_id: str | None = None) -> l
     An override whose cell is unchanged (same evidence hash) survives the re-ingest; one whose
     cell changed or vanished is cleared and returned here so the founder can enter it again.
     `share_id` is used only if the tender is new; an existing tender keeps its share ID.
+    When the run has a contracted stage with terms, its terms are written to contract_terms (the findings
+    stay in the stored artifact) and every vendor with an offer gets a DRAFT contract gate.
     """
     stats = result.stats
     return TenderRepository(db).save_tender(

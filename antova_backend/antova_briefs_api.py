@@ -8,6 +8,8 @@ and rendering helpers here are shared with the founder review routes.
 
 from __future__ import annotations
 
+import dataclasses
+
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -20,6 +22,7 @@ from antova_db import TenderMeta, TenderRepository, get_db
 from antova_engine import Override, SensitivitySettings, TenderPackage, evaluate_vendor_financials
 from antova_models import BriefResponse, EvaluateResponse
 from antova_evidence import EvidenceNotFound, citation_for, document_path, render_crop
+from antova_ingest.contract_ontology import CONTRACT_ROLES
 from antova_review import brief_payload, public_brief_payload
 
 NOT_FOUND = "Not found"
@@ -102,4 +105,7 @@ def evaluate_brief(share_id: str, rates: RatesBody, db: Session = Depends(get_db
 
 @router.get("/{share_id}/evidence/{param_id}/{source}/{which}.png")
 def get_evidence(share_id: str, param_id: str, source: str, which: str, db: Session = Depends(get_db)):
-    return evidence_png(_verified(db, share_id), param_id, source, which, PUBLIC_CACHE)
+    loaded = _verified(db, share_id)
+    # Contract documents never show on the public brief, so their pages are never served from it.
+    public = [d for d in loaded.documents if d.get("role") not in CONTRACT_ROLES]
+    return evidence_png(dataclasses.replace(loaded, documents=public), param_id, source, which, PUBLIC_CACHE)

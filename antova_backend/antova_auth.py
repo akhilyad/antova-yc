@@ -4,7 +4,9 @@ A token names a reviewer. Two ways to configure them, read on every request so t
 rotated (or set by a test) without re-importing the app:
 
 - ANTOVA_REVIEW_TOKEN: one shared token. Whoever holds it is the reviewer "founder".
-- ANTOVA_REVIEWERS: JSON, {"<reviewer id>": {"name": "Ada Lovelace", "token": "<secret>"}, ...}.
+- ANTOVA_REVIEWERS: JSON, {"<reviewer id>": {"name": "Ada Lovelace", "token": "<secret>",
+  "roles": ["finance"]}, ...}. "roles" is optional (none by default); each must be one of ROLES.
+  The founder (shared token) holds every role.
 
 Both may be set. The server decides who a request is from the token it carries; the reviewer
 name a client types into a request body is never used for attribution.
@@ -20,6 +22,7 @@ from fastapi import Header, HTTPException
 
 REVIEW_HEADER = "X-Antova-Review-Token"
 FOUNDER_ID = "founder"
+ROLES = ("engineering", "procurement", "project_management", "finance", "legal", "business_director")
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +31,7 @@ log = logging.getLogger(__name__)
 class ReviewerPrincipal:
     id: str
     name: str
+    roles: frozenset[str] = frozenset()
 
 
 class ReviewerConfigError(ValueError):
@@ -39,7 +43,7 @@ def _configured() -> list[tuple[str, ReviewerPrincipal]]:
     pairs: list[tuple[str, ReviewerPrincipal]] = []
     shared = os.environ.get("ANTOVA_REVIEW_TOKEN", "")
     if shared:
-        pairs.append((shared, ReviewerPrincipal(FOUNDER_ID, "Founder")))
+        pairs.append((shared, ReviewerPrincipal(FOUNDER_ID, "Founder", frozenset(ROLES))))
     raw = os.environ.get("ANTOVA_REVIEWERS", "").strip()
     if raw:
         try:
@@ -52,7 +56,13 @@ def _configured() -> list[tuple[str, ReviewerPrincipal]]:
                     raise TypeError(f"reviewer {reviewer_id!r} needs a token and a name that are strings")
                 if not str(reviewer_id).strip() or len(str(reviewer_id)) > 64:
                     raise TypeError("reviewer ids are 1 to 64 characters")
-                pairs.append((token, ReviewerPrincipal(str(reviewer_id), name)))
+                roles = entry.get("roles", [])
+                if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
+                    raise TypeError(f"reviewer {reviewer_id!r} roles must be a list of strings")
+                unknown = sorted(set(roles) - set(ROLES))
+                if unknown:
+                    raise TypeError(f"reviewer {reviewer_id!r} has unknown roles {unknown}; known: {list(ROLES)}")
+                pairs.append((token, ReviewerPrincipal(str(reviewer_id), name, frozenset(roles))))
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             raise ReviewerConfigError(f"ANTOVA_REVIEWERS is not valid: {exc}") from exc
     tokens = [token for token, _ in pairs]

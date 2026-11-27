@@ -44,10 +44,17 @@ _REVIEW_MESSAGES = {
 
 @dataclass
 class OpenItem:
-    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag", "project_field"]
+    kind: Literal["unpriced", "needs_inspection", "missing_price", "review_flag", "project_field",
+                  "contract_cell", "finding", "stale_disposition", "fa_changed"]
     vendor_id: str
     param_id: Optional[str]
     message: str
+
+
+@dataclass
+class ContractOpenItem(OpenItem):
+    """An open item of a vendor's contract gate; a finding's items name the finding."""
+    finding_id: Optional[str] = None
 
 
 def _item(kind: str, vendor_id: str, param_id: Optional[str] = None) -> OpenItem:
@@ -166,6 +173,79 @@ def open_items(tender: TenderPackage, overrides: Mapping[tuple[str, str], Overri
     return items
 
 
+# --- the contract gate (per vendor; never part of the TBE open items above) -------------------------
+
+CONTRACT_PREFIX = "CT-"
+PRECEDENCE_TERM = "CT-17"
+CONTRACT_MESSAGES = {
+    "conflict": "The documents disagree on this term. Review it.",
+    "flag": "Flag not reviewed yet.",
+    "precedence": "Confirm the order of precedence for this vendor.",
+    "stale": "The term changed after you reviewed it. Review it again.",
+    "rejected": "You rejected this term. Correct the documents and process them again.",
+    "finding": "Decide on this finding: accept, negotiate or waiver needed.",
+    "stale_disposition": "The finding changed after you decided on it. Decide again.",
+    "fa_changed": "The framework agreement for this vendor changed in another tender. Re-run this tender.",
+}
+
+
+def contract_cell_needs_review(term: Mapping[str, Any]) -> bool:
+    """A conflict, a flagged term, or a cited CT-17 (the reviewer confirms the precedence order)."""
+    if term.get("state") == "conflict" or term.get("flags"):
+        return True
+    return term.get("param_id") == PRECEDENCE_TERM and term.get("state") in ("cited", "inherited")
+
+
+def contract_cell_state(term: Mapping[str, Any], review: Optional[Mapping[str, Any]]) -> str:
+    """none (nothing to review), open, reviewed, stale or rejected, against the term's stored evidence_hash."""
+    if not contract_cell_needs_review(term):
+        return "none"
+    if review is None:
+        return "open"
+    if review["evidence_hash"] != term["evidence_hash"]:
+        return "stale"
+    return "rejected" if review["action"] == "reject" else "reviewed"
+
+
+def _open_message(term: Mapping[str, Any]) -> str:
+    if term.get("state") == "conflict":
+        return CONTRACT_MESSAGES["conflict"]
+    if term.get("flags"):
+        return CONTRACT_MESSAGES["flag"]
+    return CONTRACT_MESSAGES["precedence"]
+
+
+def contract_open_items(terms, findings, dispositions, cell_reviews, fa_version_now: Optional[str],
+                        fa_version_at_ingest: Optional[str]) -> list[OpenItem]:
+    """What blocks one vendor's contract gate: the framework agreement changed since ingest; contract cells
+    (conflict, flagged, or a cited CT-17) not reviewed, stale or rejected; findings without a disposition;
+    findings whose latest disposition is stale. `terms` carry their evidence_hash; `dispositions` are the
+    latest per finding with their state; `cell_reviews` map (param_id, vendor_id) to the latest review.
+    None vs None for the fa versions is unchanged (no agreement then or now)."""
+    items: list[OpenItem] = []
+    vendor_ids = [t["vendor_id"] for t in terms] + [f["vendor_id"] for f in findings]
+    vendor_id = vendor_ids[0] if vendor_ids else ""
+    if fa_version_now != fa_version_at_ingest:
+        items.append(ContractOpenItem(kind="fa_changed", vendor_id=vendor_id, param_id=None,
+                                      message=CONTRACT_MESSAGES["fa_changed"]))
+    for term in terms:
+        state = contract_cell_state(term, cell_reviews.get((term["param_id"], term["vendor_id"])))
+        if state == "none" or state == "reviewed":
+            continue
+        message = _open_message(term) if state == "open" else CONTRACT_MESSAGES[state]
+        items.append(ContractOpenItem(kind="contract_cell", vendor_id=term["vendor_id"], param_id=term["param_id"],
+                                      message=message))
+    latest = {d["finding_id"]: d for d in dispositions}
+    for finding in findings:
+        decided = latest.get(finding["id"])
+        if decided is not None and decided["state"] == "current":
+            continue
+        kind = "finding" if decided is None else "stale_disposition"
+        items.append(ContractOpenItem(kind=kind, vendor_id=finding["vendor_id"], param_id=finding.get("param_id"),
+                                      message=CONTRACT_MESSAGES[kind], finding_id=finding["id"]))
+    return items
+
+
 def _override_entries(overrides: Mapping[tuple[str, str], Override]) -> list[dict[str, str]]:
     return [
         {"param_id": param_id, "vendor_id": vendor_id,
@@ -210,12 +290,65 @@ def brief_payload(
 # What the run cost Antova. The founder sees it on the review payload; the public brief never does.
 _RUN_COST_STATS = ("api_cost_usd", "cogs_usd")
 _RUN_COST_TENDER = ("compute_cogs",)
+# Contract material is for the deployment's reviewers only (spec 4.7): never on the public brief.
+_CONTRACT_DOC_ROLES = ("framework_agreement", "owner_contract")
+_CONTRACT_FINDING_CATEGORIES = ("fa_conformance", "back_to_back", "budget", "missing")  # approvers.CATEGORIES
+_CONTRACT_KEYS = ("contract", "contract_terms", "contracted", "cas")
+# Project fields that are the buyer's commercial position: the owner contract's terms and the frozen budget.
+_PRIVATE_PROJECT_FIELDS = ("owner_terms", "frozen_budget")
+_PRIVATE_PROJECT_ITEMS = tuple(PROJECT_PREFIX + name for name in _PRIVATE_PROJECT_FIELDS)
+
+
+def _is_contract_finding(finding: Mapping[str, Any]) -> bool:
+    """A contract finding (antova_ingest.contract_findings): its category is one of the approver-rule
+    categories, or it is on a CT- term. TBE findings (antova_ingest.findings) carry a kind, no category."""
+    return (finding.get("category") in _CONTRACT_FINDING_CATEGORIES
+            or str(finding.get("param_id") or "").startswith(CONTRACT_PREFIX))
+
+
+def _names_any(value: Any, names: set[str]) -> bool:
+    return any(name in json.dumps(value, default=str, ensure_ascii=False) for name in names)
+
+
+def _without_contract_files(stats: dict[str, Any], names: set[str]) -> dict[str, Any]:
+    """Ingest stats without any entry keyed by, or naming, a contract document (locales, no_text_pages,
+    warnings, ...). A scalar stat that names one is dropped whole."""
+    if not names:
+        return stats
+    out: dict[str, Any] = {}
+    for key, value in stats.items():
+        if isinstance(value, dict):
+            out[key] = {k: v for k, v in value.items() if k not in names and not _names_any(v, names)}
+        elif isinstance(value, list):
+            out[key] = [v for v in value if not _names_any(v, names)]
+        elif not _names_any(value, names):
+            out[key] = value
+    return out
 
 
 def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """A copy of a `brief_payload` result with Antova's run cost removed, for GET /api/briefs/{share_id}."""
+    """A copy of a `brief_payload` result for GET /api/briefs/{share_id}: without Antova's run cost, and
+    without contract documents, contract terms (CT- parameters), contract findings or the CAS, and without the
+    project's owner terms and frozen budget (or any open item for them)."""
+    tender = {k: v for k, v in payload["tender"].items() if k not in _RUN_COST_TENDER + _CONTRACT_KEYS}
+    if tender.get("project") is not None:
+        tender["project"] = {k: v for k, v in tender["project"].items() if k not in _PRIVATE_PROJECT_FIELDS}
+    if tender.get("parameters") is not None:
+        tender["parameters"] = [p for p in tender["parameters"]
+                                if not str(p.get("id") or "").startswith(CONTRACT_PREFIX)]
+    if tender.get("findings") is not None:
+        tender["findings"] = [f for f in tender["findings"] if not _is_contract_finding(f)]
+    public = {k: v for k, v in payload.items() if k not in _CONTRACT_KEYS}
+    contract_files = {d.get("filename") for d in payload.get("documents") or []
+                      if d.get("role") in _CONTRACT_DOC_ROLES} - {None}
     return {
-        **payload,
-        "ingest_stats": {k: v for k, v in payload["ingest_stats"].items() if k not in _RUN_COST_STATS},
-        "tender": {k: v for k, v in payload["tender"].items() if k not in _RUN_COST_TENDER},
+        **public,
+        "ingest_stats": _without_contract_files(
+            {k: v for k, v in payload["ingest_stats"].items() if k not in _RUN_COST_STATS}, contract_files),
+        "stage_log": [e for e in payload.get("stage_log") or []
+                      if "contract" not in str(e.get("stage", "")).lower()],
+        "documents": [d for d in payload.get("documents") or [] if d.get("role") not in _CONTRACT_DOC_ROLES],
+        "open_items": [i for i in payload.get("open_items") or []
+                       if i.get("param_id") not in _PRIVATE_PROJECT_ITEMS],
+        "tender": tender,
     }

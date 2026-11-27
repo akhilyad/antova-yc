@@ -6,8 +6,9 @@ SHA-256, so two runs on the same inputs give the same hash at every stage, and
 any stage can be rerun from the stored artifacts of the stages before it.
 
 The run fingerprint covers everything that decides a run's outcome besides the
-locator's answers: the input files, the ontology, the deterministic rules, the
-rate table, the system prompt, the locator mode and the package version.
+locator's answers: the input files, the ontology, the contract-terms ontology and
+its prompt, the deterministic rules, the rate table, the system prompt, the locator
+mode and the package version.
 """
 
 from __future__ import annotations
@@ -22,11 +23,16 @@ from pathlib import Path
 from typing import Any
 
 import antova_ingest
-from antova_ingest import extract, ontology
+from antova_ingest import config, contract_ontology, extract, ontology
 
-STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled")
+# "contracted" runs after "leveled": the contract terms, checks and findings; empty for a tender without contract
+# documents, owner terms or a frozen budget (pipeline.needs_contract_pass).
+STAGE_NAMES = ("parsed", "located", "verified", "resolved", "checked", "priced", "leveled", "contracted")
 # The modules that hold deterministic rules: a change to any of them changes the fingerprint.
-RULE_MODULES = ("parse.py", "values.py", "precedence.py", "costs.py", "sweep.py", "pipeline.py", "clarify.py")
+# The contract modules are among them (ruling R34): a contract-rule change alone changes the fingerprint.
+RULE_MODULES = ("parse.py", "values.py", "precedence.py", "costs.py", "sweep.py", "pipeline.py", "clarify.py",
+                "exposure.py", "contract_ontology.py", "contract_terms.py", "contract_checks.py", "budget.py",
+                "contract_findings.py")
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 
@@ -98,15 +104,28 @@ def ontology_hash(equipment_class: str = ontology.DEFAULT_EQUIPMENT_CLASS) -> st
     })
 
 
+def contract_ontology_hash() -> str:
+    """The contract terms (CT-01..CT-17), the event order their checks use, and the prompt that locates them."""
+    return sha256_of({
+        "parameters": [dataclasses.asdict(p) for p in contract_ontology.CONTRACT_PARAMETERS],
+        "contract_roles": contract_ontology.CONTRACT_ROLES,
+        "event_order": ontology.ORDINALS.get("event", ()),
+        "prompt": sha256_text(extract.build_contract_prompt()),
+    })
+
+
 def rules_hash() -> str:
     return sha256_of({name: _source_sha256(_PACKAGE_DIR / name) for name in RULE_MODULES})
 
 
-def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
+def run_fingerprint(tender_dir: Path, locator_mode: str, *, locate_provider: str = "",
+                    locate_model: str = "") -> dict:
     """The fingerprint of a run on this folder, with the parts it was built from.
 
     Reads only the manifest and file bytes; an unreadable or missing file hashes
-    as "" (the run itself reports it).
+    as "" (the run itself reports it). It names who located (provider and model) and the
+    zero-retention agreement in force (ANTOVA_ZERO_RETENTION_REF, "" when unset), so a contract
+    approval shows which provider read its contracts.
     """
     tender_dir = Path(tender_dir)
     manifest_path = tender_dir / "manifest.json"
@@ -123,11 +142,15 @@ def run_fingerprint(tender_dir: Path, locator_mode: str) -> dict:
     parts = {
         "inputs": inputs,
         "ontology": ontology_hash(equipment_class) if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
+        "contract_ontology": contract_ontology_hash(),
         "rules": rules_hash(),
         "rate_table": rate_table,
         "prompt": sha256_text(extract.build_system_prompt(equipment_class))
         if equipment_class in ontology.PARAMETERS_BY_CLASS else "",
         "locator_mode": locator_mode,
+        "locate_provider": locate_provider,
+        "locate_model": locate_model,
+        "zero_retention_ref": config.zero_retention_reference() or "",
         "package_version": antova_ingest.__version__,
     }
     return {"fingerprint": sha256_of(parts), "parts": parts}

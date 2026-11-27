@@ -105,6 +105,8 @@ def schema_instruction() -> str:
 class ChatCompletionsLocator(ModelLocator):
     """ModelLocator's flow (saved answers, replay, windows, merge) over /chat/completions."""
 
+    provider = "explabs"
+
     def __init__(
         self,
         store: ResponseStore,
@@ -137,8 +139,10 @@ class ChatCompletionsLocator(ModelLocator):
             raise ValueError(f"EXPLABS_JSON_MODE must be json_object or off, not {json_mode!r}")
         equipment_class = extract.manifest_equipment_class(tender_dir)
         prompt = extract.build_system_prompt(equipment_class) + schema_instruction()
+        contract_prompt = extract.build_contract_prompt() + schema_instruction()
         store = ResponseStore(Path(tender_dir) / "saved_responses", model=model,
-                              salt=extract.sha256_short(prompt), equipment_class=equipment_class)
+                              salt=extract.sha256_short(prompt), equipment_class=equipment_class,
+                              contract_salt=extract.sha256_short(contract_prompt))
         return cls(
             store, mode, model=model, base_url=base_url,
             max_input_tokens=_env_int("EXPLABS_MAX_INPUT_TOKENS", DEFAULT_MAX_INPUT_TOKENS),
@@ -157,8 +161,10 @@ class ChatCompletionsLocator(ModelLocator):
         if not os.environ.get(KEY_VARIABLE):
             raise MissingCredentials(filename, KEY_VARIABLE)
 
-    def _system(self) -> str:
-        return extract.build_system_prompt(self.store.equipment_class) + schema_instruction()
+    def _system(self, contract: bool = False) -> str:
+        base = (extract.build_contract_prompt() if contract
+                else extract.build_system_prompt(self.store.equipment_class))
+        return base + schema_instruction()
 
     def _count(self, client: Any, system: str, content: str) -> int:
         return int((len(system) + len(content)) / CHARS_PER_TOKEN) + 1

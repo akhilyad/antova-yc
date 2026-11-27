@@ -23,6 +23,7 @@ from antova_engine import ComplianceStatus, CostLine
 from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, FieldDef, ParameterDef
 from antova_ingest.parse import RATE_TABLE_PATTERN, RATES_DIR
 from antova_ingest.types import FieldValue, Resolution
+from antova_ingest.values import citation_only
 
 CENTS = Decimal("0.01")
 DRIVERS = ("fixed", "copper", "labour", "freight")
@@ -235,6 +236,10 @@ def deviation_classes(param: ParameterDef, failing_fields: set[str], governing: 
     classes = []
     for f in param.fields:
         if f.name not in failing_fields:
+            continue
+        if citation_only(f):
+            # A citation-only field (values.CITATION_ONLY) is compared by hand: it is not a deviation and has
+            # no class, so it neither prices nor unprices a cell whose other fields deviate.
             continue
         if f.name in incomparable:
             # Two warranty start points with no stated gap between them: no shortfall to price.

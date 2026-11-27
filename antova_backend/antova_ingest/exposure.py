@@ -103,3 +103,91 @@ def liability_shortfall(required_pct, offered_pct, contract_value) -> Exposure:
     shortfall = max(required - offered, Decimal("0"))
     return Exposure("liability", _euros(shortfall / HUNDRED * value),
                     f"(MR {_n(required)}% − bid {_n(offered)}%) = {_n(shortfall)}% × €{value:,.2f}")
+
+
+# --- back-to-back with the owner contract (spec 9.2) ---------------------------------------------------
+# The owner's and the vendor's percentages are of different contract values, so these compare money: what
+# the EPC would owe the owner for this package against what the vendor pays back. One currency throughout;
+# a caller with two currencies converts first with the buyer-entered rate and passes the conversion in
+# `conversions`, so it is part of the formula.
+
+def _money(currency: str, value: Decimal) -> str:
+    """An amount as shown in a formula: rounded half up to the cent like every result, so a shown step never
+    disagrees with the amount by a cent. Only the display is rounded; the arithmetic uses the exact value."""
+    return f"{currency} {_euros(value):,.2f}"
+
+
+def _steps(conversions, delay_weeks, days: Decimal) -> list[str]:
+    steps = list(conversions)
+    weeks = _dec(delay_weeks)
+    if weeks is not None:
+        steps.append(f"{_n(weeks)} weeks × 7 = {_n(days)} days of delay")  # ruling R21: the scenario is in weeks
+    return steps
+
+
+def back_to_back_ld_gap(owner_rate_money_per_day, owner_cap_money, package_share_pct,
+                        vendor_rate: tuple[Decimal, str] | None, vendor_cap_pct, po_value, delay_days, *,
+                        currency: str, delay_weeks=None, conversions: tuple[str, ...] = (),
+                        vendor_provides_no_lds: bool = False) -> Exposure:
+    """What the EPC would owe the owner for `delay_days` of this package's delay, less what the vendor pays back.
+
+    Owed: min(owner rate per day × days, owner cap) × the package's share of owner LDs. Paid back:
+    min(order value × vendor rate × days, order value × vendor cap), a weekly rate applied as rate × days / 7.
+    Owed and paid back are each worked out exactly, then rounded half up to the cent, and the gap is
+    max(owed − paid back, 0) of those two figures (ruling R28), so the formula on the sheet adds up; it is
+    at most a cent from the gap of the unrounded figures. The caller passes the delay scenario in days
+    (weeks × 7) and may pass `delay_weeks` to show that conversion. `currency` is that of every amount passed;
+    there is no default. `vendor_provides_no_lds`: the offer explicitly excludes LDs, so the vendor pays back
+    nothing and its rate, cap and the order value are not needed; an offer that only does not state a rate is
+    not this, and stays unknown."""
+    kind = "back_to_back_ld"
+    owner_rate, owner_cap, share, cap, po, days = (_dec(v) for v in (
+        owner_rate_money_per_day, owner_cap_money, package_share_pct, vendor_cap_pct, po_value, delay_days))
+    rate, period = (_dec(vendor_rate[0]), vendor_rate[1]) if vendor_rate is not None else (None, None)
+    vendor_inputs = () if vendor_provides_no_lds else (
+        ("the vendor's LD rate", rate), ("the vendor's LD cap", cap), ("the order value", po))
+    missing = [name for name, v in (
+        ("the owner LD rate in money per day", owner_rate), ("the owner LD cap in money", owner_cap),
+        ("the package's share of owner LDs", share), *vendor_inputs, ("the delay to assume", days)) if v is None]
+    if missing:
+        return _unknown(kind, "not known: " + ", ".join(missing))
+    if not vendor_provides_no_lds and period not in ("day", "week"):
+        return _unknown(kind, f"the vendor's LD rate is per {period}, not per day or per week")
+    if days < 0:
+        return _unknown(kind, "the delay to assume is negative")
+    owed = _euros(min(owner_rate * days, owner_cap) * share / HUNDRED)
+    if vendor_provides_no_lds:
+        pays = Decimal("0")
+        paid_back = f"paid back by the vendor: {_money(currency, pays)} (the offer provides no liquidated damages)"
+    else:
+        rate_for_delay = rate * days if period == "day" else rate * days / 7
+        pays = _euros(min(po * rate_for_delay / HUNDRED, po * cap / HUNDRED))
+        times = f"{_n(days)} days" if period == "day" else f"{_n(days)}/7 weeks"
+        paid_back = (f"paid back by the vendor: min({_n(rate)}% per {period} × {times}, {_n(cap)}% cap) × "
+                     f"{_money(currency, po)} = {_money(currency, pays)}")
+    gap = max(owed - pays, Decimal("0.00"))
+    formula = "; ".join([*_steps(conversions, delay_weeks, days),
+        f"owed to the owner: min({_money(currency, owner_rate)} per day × {_n(days)} days, "
+        f"{_money(currency, owner_cap)} cap) × {_n(share)}% share = {_money(currency, owed)}",
+        paid_back,
+        f"gap max({_money(currency, owed)} − {_money(currency, pays)}, 0) = {_money(currency, gap)}"])
+    return Exposure(kind, gap, formula)
+
+
+def liability_back_to_back(owner_required_money, vendor_cap_pct, po_value, *, currency: str,
+                           conversions: tuple[str, ...] = ()) -> Exposure:
+    """The part of the liability the EPC owes the owner that the vendor's cap (a percentage of its order) does
+    not carry: owner amount − order value × cap, never below zero. Both figures are rounded half up to the
+    cent before the difference (ruling R28), so the formula adds up."""
+    kind = "back_to_back_liability"
+    owner, cap, po = _dec(owner_required_money), _dec(vendor_cap_pct), _dec(po_value)
+    missing = [name for name, v in (("the owner liability cap", owner), ("the vendor's liability cap", cap),
+                                    ("the order value", po)) if v is None]
+    if missing:
+        return _unknown(kind, "not known: " + ", ".join(missing))
+    owner, carried = _euros(owner), _euros(po * cap / HUNDRED)
+    gap = max(owner - carried, Decimal("0.00"))
+    formula = "; ".join([*conversions,
+        f"gap max(owner cap {_money(currency, owner)} − vendor {_n(cap)}% × {_money(currency, po)} "
+        f"({_money(currency, carried)}), 0) = {_money(currency, gap)}"])
+    return Exposure(kind, gap, formula)

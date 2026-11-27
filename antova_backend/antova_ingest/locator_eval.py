@@ -2,6 +2,11 @@
 
     python -m antova_ingest.locator_eval [--json] [TENDER_DIR ...]
     python -m antova_ingest.locator_eval --live --spend [TENDER_DIR ...]
+    python -m antova_ingest.locator_eval --pack TENDER-2026-419 --contract
+
+With --contract, the contract-terms pass (CT-01..CT-17) is scored too, against the answer key's
+ideal_contract_locate, per document and per term as for the equipment pass. A contract document goes
+to the locator only past the zero-retention guard (a synthetic pack passes it).
 
 The mutation eval (antova_ingest.eval) runs the deterministic stages with the answer-key
 locator, so it says nothing about the model. This scores the locate stage itself, from the
@@ -27,29 +32,37 @@ from pathlib import Path
 import anthropic
 
 from antova_ingest import extract, verify
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_ROLES
 from antova_ingest.extract import ModelLocator, ExtractError, LocateOutcome, Locator, ResponseStore
 from antova_ingest.ontology import PARAMETERS
 from antova_ingest.parse import DocumentUnreadable, load_manifest, parse_document, verify_quote
-from antova_ingest.pipeline import SAMPLES_DIR, IngestFailed, run_ingest
+from antova_ingest.pipeline import SAMPLES_DIR, IngestFailed, contract_text_allowed, run_ingest
 
 DEFAULT_PACKS = ("TENDER-2026-402", "TENDER-2026-417")
 
 
 class _Remembering:
-    """Locates each document once, so scoring and the pipeline run share one (possibly paid) answer."""
+    """Locates each document once per pass, so scoring and the pipeline run share one (possibly paid)
+    answer. It says what the locator it wraps says about sending text, so the zero-retention guard
+    judges the real locator."""
 
     def __init__(self, locator: Locator):
         self.locator = locator
-        self.answers: dict[str, LocateOutcome | Exception] = {}
+        self.answers: dict[tuple[str, bool], LocateOutcome | Exception] = {}
+        self.sends_text = getattr(locator, "sends_text", True)
+        for name in ("model", "prices", "provider"):
+            if hasattr(locator, name):
+                setattr(self, name, getattr(locator, name))
 
-    def locate(self, doc):
-        file = doc.entry.file
-        if file not in self.answers:
+    def locate(self, doc, *, contract: bool = False):
+        key = (doc.entry.file, contract)
+        if key not in self.answers:
             try:
-                self.answers[file] = self.locator.locate(doc)
+                self.answers[key] = (self.locator.locate(doc, contract=True) if contract
+                                     else self.locator.locate(doc))
             except Exception as exc:  # remembered and raised again, for the pipeline to judge
-                self.answers[file] = exc
-        answer = self.answers[file]
+                self.answers[key] = exc
+        answer = self.answers[key]
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -61,7 +74,8 @@ def _where(doc, page: int, quote: str):
     return None if citation is None else (citation.page, citation.quote)
 
 
-def score_document(doc, ideal: dict, outcome: LocateOutcome, prices: tuple | None = None) -> dict:
+def score_document(doc, ideal: dict, outcome: LocateOutcome, prices: tuple | None = None,
+                   parameters=PARAMETERS) -> dict:
     response = outcome.response
     wanted = {(c["param_id"], where) for c in ideal["candidates"]
               if (where := _where(doc, c["page"], c["quote"])) is not None}
@@ -92,7 +106,7 @@ def score_document(doc, ideal: dict, outcome: LocateOutcome, prices: tuple | Non
         "headline_ok": same(response.headline_price, ideal.get("headline_price")),
         "cover_ok": same(response.cover_claim, ideal.get("cover_claim")),
         # The locator must give every parameter a candidate or a not_stated entry.
-        "silent_params": sorted(p.id for p in PARAMETERS if p.id not in answered),
+        "silent_params": sorted(p.id for p in parameters if p.id not in answered),
         "windows": len(outcome.windows) if outcome.windows else 1,
         "cost_usd": str(extract.api_cost_usd(outcome.input_tokens, outcome.output_tokens, *(prices or ()))),
         "per_param": {pid: (len({m for m in matched if m[0] == pid}), len({w for w in wanted if w[0] == pid}))
@@ -115,13 +129,47 @@ def _cell_accuracy(tender, expected: dict) -> tuple[int, int, int]:
     return total, status_ok, pricing_ok
 
 
-def score_pack(tender_dir: Path, locator: Locator) -> dict:
-    """Score every document of one tender, then run the pipeline on the same answers."""
+def _per_param(documents: list[dict]) -> dict:
+    per_param: dict[str, list[int]] = {}
+    for d in documents:
+        for pid, (hit, want) in d["per_param"].items():
+            per_param.setdefault(pid, [0, 0])
+            per_param[pid][0] += hit
+            per_param[pid][1] += want
+    return {pid: {"matched": h, "expected": w} for pid, (h, w) in sorted(per_param.items())}
+
+
+def score_pack(tender_dir: Path, locator: Locator, contract: bool = False) -> dict:
+    """Score every document of one tender, then run the pipeline on the same answers. With `contract`, the
+    contract-terms pass of every document the answer key has an ideal_contract_locate entry for is scored too."""
     tender_dir = Path(tender_dir)
     expected = json.loads((tender_dir / "expected.json").read_text(encoding="utf-8"))
     remembering = _Remembering(locator)
-    documents, missing = [], []
-    for entry in load_manifest(tender_dir).documents:
+    documents, missing, held = [], [], []
+    contract_documents: list[dict] = []
+    manifest = load_manifest(tender_dir)
+    allowed = contract_text_allowed(locator, manifest)
+    for entry in manifest.documents:
+        ideal_contract = expected.get("ideal_contract_locate", {}).get(entry.file) if contract else None
+        if ideal_contract is not None and allowed:
+            try:
+                doc = parse_document(tender_dir, entry)
+                outcome = remembering.locate(doc, contract=True)
+            except DocumentUnreadable:
+                pass  # nothing to locate; the pipeline reports it
+            except (ExtractError, anthropic.APIError) as exc:
+                first_line = (str(exc).splitlines() or [""])[0][:300]
+                missing.append({"file": entry.file, "reason": f"contract terms: {type(exc).__name__}: {first_line}"})
+            else:
+                contract_documents.append(score_document(doc, ideal_contract, outcome,
+                                                         getattr(locator, "prices", None), CONTRACT_PARAMETERS))
+        if entry.role in CONTRACT_ROLES:
+            # A contract document has no equipment pass. It goes to the locator (its contract pass, scored
+            # above with --contract and run in the pipeline below) only past the zero-retention guard; held
+            # back is not missing: the pipeline holds it back the same way.
+            if not allowed:
+                held.append(entry.file)
+            continue
         try:
             doc = parse_document(tender_dir, entry)
         except DocumentUnreadable:
@@ -145,16 +193,14 @@ def score_pack(tender_dir: Path, locator: Locator) -> dict:
                    "mismatches": mismatches}
         except IngestFailed as exc:
             run = {"ran": False, "error": str(exc)}
-    per_param: dict[str, list[int]] = {}
-    for d in documents:
-        for pid, (hit, want) in d["per_param"].items():
-            per_param.setdefault(pid, [0, 0])
-            per_param[pid][0] += hit
-            per_param[pid][1] += want
-    return {"tender": tender_dir.name, "locator": getattr(locator, "model", "?"), "documents": documents, "missing": missing,
-            "per_param": {pid: {"matched": h, "expected": w} for pid, (h, w) in sorted(per_param.items())},
-            "cost_usd": str(sum((Decimal(d["cost_usd"]) for d in documents), Decimal("0"))),
-            "pipeline": run}
+    scored = {"tender": tender_dir.name, "locator": getattr(locator, "model", "?"), "documents": documents,
+              "missing": missing, "held": held, "per_param": _per_param(documents),
+              "cost_usd": str(sum((Decimal(d["cost_usd"]) for d in [*documents, *contract_documents]), Decimal("0"))),
+              "pipeline": run}
+    if contract:
+        scored["contract_documents"] = contract_documents
+        scored["contract_per_param"] = _per_param(contract_documents)
+    return scored
 
 
 def stored_locator(tender_dir: Path, live: bool) -> ModelLocator:
@@ -166,27 +212,37 @@ def _pct(value) -> str:
     return "n/a" if value is None else f"{value:.0%}"
 
 
+def _tables(lines: list[str], documents: list[dict], per_param: dict, label: str) -> None:
+    lines.append("| document | returned | verified | rejected | matched | expected | recall | extra |"
+                 " headline | cover | silent | windows |")
+    lines.append("|" + "---|" * 12)
+    for d in documents:
+        lines.append(
+            f"| {d['file']} | {d['returned']} | {d['verified']} | {d['rejected']} | {d['matched']} | "
+            f"{d['expected']} | {_pct(d['recall'])} | {d['extra']} | {d['headline_ok']} | {d['cover_ok']} | "
+            f"{', '.join(d['silent_params']) or '-'} | {d['windows']} |")
+    lines.append("")
+    lines.append(f"| {label} | matched | expected | recall |")
+    lines.append("|---|---|---|---|")
+    for pid, row in per_param.items():
+        recall = row["matched"] / row["expected"] if row["expected"] else None
+        lines.append(f"| {pid} | {row['matched']} | {row['expected']} | {_pct(recall)} |")
+
+
 def format_report(packs: list[dict]) -> str:
     lines = []
     for pack in packs:
         lines.append(f"## {pack['tender']}  (locator model: {pack['locator']})")
         for m in pack["missing"]:
             lines.append(f"- not scored: {m['file']}: {m['reason']}")
+        for file in pack.get("held", []):
+            lines.append(f"- not located: {file}: contract document, and no zero-retention agreement "
+                         f"is set (ANTOVA_ZERO_RETENTION_REF)")
         if pack["documents"]:
-            lines.append("| document | returned | verified | rejected | matched | expected | recall | extra |"
-                         " headline | cover | silent | windows |")
-            lines.append("|" + "---|" * 12)
-            for d in pack["documents"]:
-                lines.append(
-                    f"| {d['file']} | {d['returned']} | {d['verified']} | {d['rejected']} | {d['matched']} | "
-                    f"{d['expected']} | {_pct(d['recall'])} | {d['extra']} | {d['headline_ok']} | {d['cover_ok']} | "
-                    f"{', '.join(d['silent_params']) or '-'} | {d['windows']} |")
-            lines.append("")
-            lines.append("| parameter | matched | expected | recall |")
-            lines.append("|---|---|---|---|")
-            for pid, row in pack["per_param"].items():
-                recall = row["matched"] / row["expected"] if row["expected"] else None
-                lines.append(f"| {pid} | {row['matched']} | {row['expected']} | {_pct(recall)} |")
+            _tables(lines, pack["documents"], pack["per_param"], "parameter")
+        if pack.get("contract_documents"):
+            lines.append("\nContract terms:")
+            _tables(lines, pack["contract_documents"], pack["contract_per_param"], "term")
         run = pack["pipeline"]
         if run.get("ran"):
             cells = run["cells"] or 1
@@ -208,13 +264,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print the scores as JSON")
     parser.add_argument("--live", action="store_true", help="record an answer for documents that have none (paid)")
     parser.add_argument("--spend", action="store_true", help="confirm --live may call the paid LLM API")
+    parser.add_argument("--pack", action="append", default=[], metavar="TENDER_ID",
+                        help="a sample pack by tender id (samples/<id>); may be repeated")
+    parser.add_argument("--contract", action="store_true",
+                        help="also score the contract-terms pass (CT-01..CT-17) against the answer key")
     args = parser.parse_args(argv)
     if args.live and not args.spend:
         print("--live calls the paid LLM API for every document without a saved answer. "
               "Add --spend to confirm.", file=sys.stderr)
         return 2
-    folders = [Path(t) for t in args.tenders] or [SAMPLES_DIR / name for name in DEFAULT_PACKS]
-    packs = [score_pack(folder, stored_locator(folder, args.live)) for folder in folders]
+    folders = ([Path(t) for t in args.tenders] + [SAMPLES_DIR / name for name in args.pack]
+               or [SAMPLES_DIR / name for name in DEFAULT_PACKS])
+    packs = [score_pack(folder, stored_locator(folder, args.live), contract=args.contract) for folder in folders]
     print(json.dumps(packs, indent=2, default=str) if args.json else format_report(packs))
     complete = all(p["pipeline"].get("ran") for p in packs)
     return 0 if complete else 1

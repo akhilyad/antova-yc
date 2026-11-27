@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import antova_engine as engine
 from samples import scenario
+from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
 from antova_ingest.costs import load_rate_table, price
 from antova_ingest.ontology import PARAMETERS, PARAMS_BY_ID
 from antova_ingest.precedence import merge_requirement, resolve
@@ -39,13 +40,15 @@ def section_for(page: int) -> str:
     return "general"
 
 
-def evidence(param_id: str, section: str, page: int, quote: str) -> Evidence:
+def evidence(param_id: str, section: str, page: int, quote: str, filename: str = "test.pdf") -> Evidence:
+    """Evidence for an equipment parameter or a contract term (CT-xx), with the values its quote states."""
+    param = CONTRACT_PARAMS_BY_ID.get(param_id) or PARAMS_BY_ID[param_id]
     values = {}
-    for f in PARAMS_BY_ID[param_id].fields:
+    for f in param.fields:
         value = parse_field(f.kind, quote, f.name)
         if value is not None:
             values[f.name] = value
-    return Evidence(param_id, Citation("test.pdf", page, (10.0, 20.0, 30.0, 40.0), quote, section), values)
+    return Evidence(param_id, Citation(filename, page, (10.0, 20.0, 30.0, 40.0), quote, section), values)
 
 
 def requirement(param_id: str):

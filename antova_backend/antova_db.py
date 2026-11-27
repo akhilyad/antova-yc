@@ -1,5 +1,5 @@
 """
-Antova Database & Repository Layer (schema v8)
+Antova Database & Repository Layer (schema v11)
 
 - Tender-scoped keys: vendor and parameter IDs repeat across tenders, so they
   are keyed by (tender_id, id).
@@ -24,19 +24,25 @@ Antova Database & Repository Layer (schema v8)
 - v8 adds `tenders.verified_run_id`: the ingest run that was verified (NULL before v8).
 - v9 adds `tenders.project`: the buyer-entered project baseline as JSON (NULL when the manifest has none).
 - v10 adds `tenders.findings`: the findings register as JSON (NULL for classes that carry none).
+- v11 adds contract approval: `counterparties`, `projects` (with owner terms a tender inherits), the
+  per-vendor `contract_terms` and `contract_gates`, the append-only `finding_dispositions`,
+  `approver_removals`, `deletion_log` and `price_history`; plus `tenders.project_id`,
+  `vendors.counterparty_id` (set only explicitly, never matched by name) and
+  `source_documents.counterparty_id`, `.amends`, `.dated`.
 """
 
 import json
 import logging
 import os
+import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, List, Optional
 
 from sqlalchemy import (
-    Boolean, Column, Connection, DateTime, Engine, Float, ForeignKey, Index, Integer, String, Text,
+    Boolean, Column, Connection, Date, DateTime, Engine, Float, ForeignKey, Index, Integer, String, Text,
     UniqueConstraint, create_engine, event, inspect, text,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -46,9 +52,10 @@ import antova_engine as engine_models
 log = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("ANTOVA_DATABASE_URL", "sqlite:///./antova_enterprise.db")
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 LEGACY_TABLES = ("extracted_parameters", "parameters", "vendors", "tenders")
 TENDER_STATUSES = ("DRAFT", "VERIFIED")
+CONTRACT_GATE_STATUSES = ("DRAFT", "VERIFIED")
 
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True, echo=False)
@@ -124,6 +131,7 @@ class TenderRecord(Base):
     stage_log = Column(Text, nullable=False, default="[]")
     project = Column(Text, nullable=True)  # JSON of the buyer-entered baseline, or NULL
     findings = Column(Text, nullable=True)  # JSON of the findings register, or NULL
+    project_id = Column(String(64), ForeignKey("projects.id"), nullable=True)  # the baseline's project_id
 
 
 class AdderOverrideRecord(Base):
@@ -151,6 +159,9 @@ class SourceDocumentRecord(Base):
     role = Column(String(32), nullable=False)
     page_count = Column(Integer, nullable=False)
     pages_without_text = Column(Text, nullable=False, default="[]")
+    counterparty_id = Column(String(64), nullable=True)  # the manifest's, for an FA or a bid
+    amends = Column(String(255), nullable=True)  # the file name this document amends
+    dated = Column(Date, nullable=True)
 
 
 class VendorRecord(Base):
@@ -167,6 +178,8 @@ class VendorRecord(Base):
     cover_claim = Column(Text, nullable=False)
     badge = Column(String(64), nullable=False)
     extras = Column(Text, nullable=False, default="{}")  # JSON: the Vendor fields in VENDOR_EXTRAS
+    # The counterparty this vendor is. Set only by a person (suggest_counterparty only suggests); kept on re-ingest.
+    counterparty_id = Column(String(64), nullable=True, index=True)
 
 
 class ParameterRecord(Base):
@@ -288,6 +301,113 @@ class AuditLedgerRecord(Base):
     )
 
 
+class CounterpartyRecord(Base):
+    """A legal entity a framework agreement is signed with."""
+    __tablename__ = "counterparties"
+
+    id = Column(String(64), primary_key=True)
+    legal_name = Column(String(255), nullable=False)
+    aliases = Column(Text, nullable=False, default="[]")  # JSON list of other names
+    parent_company = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class ProjectRecord(Base):
+    """A project several tenders belong to; its owner terms are used by a tender that has none of its own."""
+    __tablename__ = "projects"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(255), nullable=False)
+    buyer_entity = Column(String(255), nullable=False)
+    owner_terms = Column(Text, nullable=True)  # JSON of antova_ingest.types.OwnerTerms, or NULL
+    created_at = Column(DateTime, nullable=False)
+
+
+class ContractTermRecord(Base):
+    """One resolved contract term for one vendor, as the contracted stage produced it."""
+    __tablename__ = "contract_terms"
+
+    tender_id = Column(String(64), ForeignKey("tenders.id"), primary_key=True)
+    vendor_id = Column(String(64), primary_key=True)
+    param_id = Column(String(64), primary_key=True)
+    body = Column(Text, nullable=False)  # JSON
+    evidence_hash = Column(String(64), nullable=False)  # sha256 of the canonical body
+
+
+class ContractGateRecord(Base):
+    """The contract review gate for one vendor of a tender. Separate from the tender's TBE status."""
+    __tablename__ = "contract_gates"
+
+    tender_id = Column(String(64), ForeignKey("tenders.id"), primary_key=True)
+    vendor_id = Column(String(64), primary_key=True)
+    status = Column(String(16), nullable=False, default="DRAFT")
+    verified_at = Column(DateTime, nullable=True)
+    verified_by = Column(String(64), nullable=True)
+    verified_run_id = Column(String(64), nullable=True)
+    # fa_version of the vendor's counterparty at ingest; compared again at verify and on CAS export.
+    fa_version = Column(String(64), nullable=True)
+
+
+class FindingDispositionRecord(Base):
+    """One decision on one contract finding. Rows are only ever added; the latest per finding counts."""
+    __tablename__ = "finding_dispositions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tender_id = Column(String(64), ForeignKey("tenders.id"), index=True, nullable=False)
+    vendor_id = Column(String(64), nullable=False)
+    finding_id = Column(String(128), nullable=False)
+    disposition = Column(String(32), nullable=False)
+    reason = Column(Text, nullable=False)
+    waiver_role = Column(String(64), nullable=True)
+    reviewer = Column(String(128), nullable=False)
+    evidence_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class ApproverRemovalRecord(Base):
+    """An approver taken off a vendor's approval sheet: who, by whom and why. Append-only."""
+    __tablename__ = "approver_removals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tender_id = Column(String(64), ForeignKey("tenders.id"), index=True, nullable=False)
+    vendor_id = Column(String(64), nullable=False)
+    approver = Column(String(128), nullable=False)
+    reason = Column(Text, nullable=False)
+    removed_by = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class DeletionLogRecord(Base):
+    """A counterparty's data was deleted: by whom, when, and how many rows of each kind."""
+    __tablename__ = "deletion_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    counterparty_id = Column(String(64), nullable=False, index=True)
+    deleted_by = Column(String(64), nullable=False)
+    deleted_at = Column(DateTime, nullable=False)
+    counts = Column(Text, nullable=False, default="{}")  # JSON: table -> rows deleted
+
+
+class PriceHistoryRecord(Base):
+    """One imported historical price. Numbers are Decimal strings; an unknown is NULL."""
+    __tablename__ = "price_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project = Column(String(255), nullable=False)
+    country = Column(String(64), nullable=True)
+    capacity_mwp = Column(String(32), nullable=True)
+    capacity_mva = Column(String(32), nullable=True)
+    dc_ac_ratio = Column(String(32), nullable=True)
+    equipment = Column(String(128), nullable=False)
+    manufacturer = Column(String(255), nullable=True)
+    offer_date = Column(Date, nullable=True)
+    price = Column(String(32), nullable=True)
+    currency = Column(String(3), nullable=True)
+    option_lines = Column(Text, nullable=False, default="[]")  # JSON
+    imported_at = Column(DateTime, nullable=False)
+    imported_by = Column(String(64), nullable=False)
+
+
 # --- JSON helpers ---
 
 def _dump(value: Any) -> Optional[str]:
@@ -389,7 +509,11 @@ class TenderRepository:
         """
         tid = tender.id
         try:
-            for model in (ExtractedParameterRecord, ParameterRecord, VendorRecord, SourceDocumentRecord):
+            # A vendor's counterparty is set by a person, never by the ingest: carry it over the re-ingest.
+            linked = dict(self.db.query(VendorRecord.id, VendorRecord.counterparty_id)
+                          .filter(VendorRecord.tender_id == tid, VendorRecord.counterparty_id.isnot(None)).all())
+            for model in (ExtractedParameterRecord, ParameterRecord, VendorRecord, SourceDocumentRecord,
+                          ContractTermRecord, ContractGateRecord):
                 self.db.query(model).filter(model.tender_id == tid).delete(synchronize_session=False)
             record = self.db.get(TenderRecord, tid) or TenderRecord(id=tid, share_id=share_id or new_share_id())
             record.title = tender.title
@@ -411,6 +535,7 @@ class TenderRepository:
             record.stage_log = _dump(stage_log or [])
             record.project = _dump(tender.project) if tender.project else None
             record.findings = _dump(tender.findings) if tender.findings is not None else None
+            record.project_id = self._ensure_project(tender, ingested_at)
             self.db.add(record)
             # No relationship() links these tables, so SQLAlchemy does not order the inserts by foreign
             # key. Write the tender row first: every row below points at it.
@@ -423,6 +548,7 @@ class TenderRepository:
                     headline_price=v.headline_price or 0.0, headline_citation=_dump(v.headline_citation),
                     doc_name=v.doc_name, cover_claim=v.cover_claim, badge=v.badge,
                     extras=_dump({name: getattr(v, name) for name in VENDOR_EXTRAS}),
+                    counterparty_id=linked.get(v.id),
                 ))
             for position, p in enumerate(tender.parameters):
                 self.db.add(ParameterRecord(
@@ -447,13 +573,124 @@ class TenderRepository:
                 self.db.add(SourceDocumentRecord(
                     tender_id=tid, vendor_id=d.vendor_id, filename=d.filename, sha256=d.sha256,
                     role=d.role, page_count=d.page_count, pages_without_text=_dump(d.pages_without_text),
+                    counterparty_id=getattr(d, "counterparty_id", None), amends=getattr(d, "amends", None),
+                    dated=getattr(d, "dated", None),
                 ))
+            self.db.flush()
+            self._save_contract(tender, documents, (run or {}).get("artifacts") or {}, linked)
             cleared = self._reconcile_overrides(tender)
             self.db.commit()
             return cleared
         except Exception:
             self.db.rollback()
             raise
+
+    def _ensure_project(self, tender: engine_models.TenderPackage, at: datetime) -> Optional[str]:
+        """The baseline's project_id; a project not yet entered gets a row (named by its ID, no owner terms)."""
+        project_id = (tender.project or {}).get("project_id")
+        if not project_id:
+            return None
+        if self.db.get(ProjectRecord, project_id) is None:
+            self.db.add(ProjectRecord(id=project_id, name=project_id, buyer_entity=tender.client,
+                                      owner_terms=None, created_at=at))
+            self.db.flush()
+        return project_id
+
+    def _save_contract(self, tender: engine_models.TenderPackage, documents: list, artifacts: dict,
+                       linked: dict[str, str]) -> None:
+        """Write the contracted stage's terms and a DRAFT gate per vendor with an offer (the rows were cleared).
+
+        The findings stay in the stored contracted artifact (contract_findings reads them). A gate records the
+        fa_version of the vendor's counterparty now, so a later verify or export can see the agreement changed.
+        Nothing is written for a tender that does not go to contract approval (no terms)."""
+        artifact = artifacts.get("contracted")
+        body = artifact.load() if artifact is not None else {}
+        terms = body.get("terms") or []
+        if not terms:
+            return
+        from antova_ingest.artifacts import canonical_json, sha256_text
+
+        for term in terms:
+            text_ = canonical_json(term)
+            self.db.add(ContractTermRecord(tender_id=tender.id, vendor_id=term["vendor_id"], param_id=term["param_id"],
+                                           body=text_, evidence_hash=sha256_text(text_)))
+        for vendor in tender.vendors:
+            counterparty = linked.get(vendor.id) or _bid_counterparty(documents, vendor.id)
+            self.db.add(ContractGateRecord(
+                tender_id=tender.id, vendor_id=vendor.id, status="DRAFT",
+                fa_version=fa_version(self.db, counterparty) if counterparty else None,
+            ))
+
+    def contracted_body(self, tender_id: str) -> dict:
+        """The contracted stage body of the tender's latest run; {} when none."""
+        run = self.get_run(tender_id)
+        artifact = self.get_stage_artifacts(run["run_id"]).get("contracted") if run else None
+        return artifact.load() if artifact is not None else {}
+
+    def contract_findings(self, tender_id: str) -> list[dict]:
+        """The contract findings of the tender's latest run, from its contracted artifact; [] when none."""
+        return self.contracted_body(tender_id).get("findings") or []
+
+    def contract_terms(self, tender_id: str, vendor_id: str) -> list[dict]:
+        """The vendor's stored contract terms, each body with its evidence_hash, in ontology order."""
+        from antova_ingest.contract_ontology import CONTRACT_PARAMETERS
+
+        order = {p.id: i for i, p in enumerate(CONTRACT_PARAMETERS)}
+        records = self.db.query(ContractTermRecord).filter_by(tender_id=tender_id, vendor_id=vendor_id).all()
+        terms = [{**json.loads(r.body), "evidence_hash": r.evidence_hash} for r in records]
+        return sorted(terms, key=lambda t: order.get(t["param_id"], len(order)))
+
+    def vendor_counterparty(self, tender_id: str, vendor_id: str) -> Optional[str]:
+        """The vendor's counterparty: the one a person linked, else the one its bid documents name."""
+        vendor = self.db.get(VendorRecord, (tender_id, vendor_id))
+        if vendor is not None and vendor.counterparty_id:
+            return vendor.counterparty_id
+        return _bid_counterparty(self.db.query(SourceDocumentRecord).filter_by(tender_id=tender_id).all(), vendor_id)
+
+    def put_project(self, project_id: str, name: str, buyer_entity: str, owner_terms: Any = None, *,
+                    at: datetime) -> None:
+        """Create or update a project. `owner_terms` is an antova_ingest.types.OwnerTerms, or None."""
+        record = self.db.get(ProjectRecord, project_id) or ProjectRecord(id=project_id, created_at=at)
+        record.name = name
+        record.buyer_entity = buyer_entity
+        record.owner_terms = owner_terms.model_dump_json() if owner_terms is not None else None
+        self.db.add(record)
+        self.db.commit()
+
+    def owner_terms(self, tender_id: str):
+        """The owner terms that apply to a tender: its own if its baseline has them, else its project's, else None."""
+        from antova_ingest.types import OwnerTerms
+
+        record = self.db.get(TenderRecord, tender_id)
+        if record is None:
+            return None
+        project = _load(record.project) or {}
+        if project.get("owner_terms") is not None:
+            return OwnerTerms.model_validate(project["owner_terms"])
+        parent = self.db.get(ProjectRecord, record.project_id) if record.project_id else None
+        if parent is None or parent.owner_terms is None:
+            return None
+        return OwnerTerms.model_validate_json(parent.owner_terms)
+
+    def put_counterparty(self, counterparty_id: str, legal_name: str, *, aliases: Optional[list[str]] = None,
+                         parent_company: Optional[str] = None, at: datetime) -> None:
+        record = self.db.get(CounterpartyRecord, counterparty_id) or CounterpartyRecord(id=counterparty_id,
+                                                                                       created_at=at)
+        record.legal_name = legal_name
+        record.aliases = _dump(list(aliases or []))
+        record.parent_company = parent_company
+        self.db.add(record)
+        self.db.commit()
+
+    def set_vendor_counterparty(self, tender_id: str, vendor_id: str, counterparty_id: Optional[str]) -> None:
+        """Link (or, with None, unlink) a vendor to a counterparty. The only way the link is made."""
+        record = self.db.get(VendorRecord, (tender_id, vendor_id))
+        if record is None:
+            raise KeyError(f"no vendor {vendor_id!r} in tender {tender_id!r}")
+        if counterparty_id is not None and self.db.get(CounterpartyRecord, counterparty_id) is None:
+            raise KeyError(f"no counterparty {counterparty_id!r}")
+        record.counterparty_id = counterparty_id
+        self.db.commit()
 
     def _reconcile_overrides(self, tender: engine_models.TenderPackage) -> list[dict]:
         """Keep each override whose cell is unchanged in `tender`; delete and report the rest."""
@@ -734,6 +971,54 @@ class TenderRepository:
         )
 
 
+def _bid_counterparty(documents: list, vendor_id: str) -> Optional[str]:
+    """The counterparty the manifest names on a vendor's bid documents, if exactly one."""
+    named = {getattr(d, "counterparty_id", None) for d in documents
+             if d.role == "vendor_bid" and d.vendor_id == vendor_id} - {None}
+    return next(iter(named)) if len(named) == 1 else None
+
+
+def fa_version(db: Session, counterparty_id: str) -> Optional[str]:
+    """sha256 over the sorted sha256s of the counterparty's framework agreement and amendment documents, in
+    every tender; None when the counterparty has none.
+
+    Adding, removing or changing any of them changes the version."""
+    hashes = sorted({sha for (sha,) in db.query(SourceDocumentRecord.sha256).filter(
+        SourceDocumentRecord.role == "framework_agreement",
+        SourceDocumentRecord.counterparty_id == counterparty_id)})
+    if not hashes:
+        return None
+    return hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
+
+
+# Words that name a legal form or a country of incorporation, not the business: "Kestrel Power Conversion
+# UK Ltd" and "Kestrel Power Conversion AG" share the stem "kestrel power conversion".
+_ENTITY_WORDS = frozenset({
+    "ag", "gmbh", "mbh", "kg", "co", "ltd", "limited", "plc", "inc", "llc", "llp", "corp", "corporation", "sa",
+    "sas", "sarl", "srl", "spa", "bv", "nv", "oy", "ab", "as", "asa", "aps", "se", "pte", "pty", "kk", "sl",
+    "uk", "gb", "us", "usa", "de", "fr", "it", "es", "nl", "be", "ch", "at", "tr", "cn", "in", "jp", "pl", "eu",
+})
+
+
+def _name_stem(name: str) -> str:
+    words = "".join(ch if ch.isalnum() else " " for ch in name.lower()).split()
+    return " ".join(w for w in words if w not in _ENTITY_WORDS)
+
+
+def suggest_counterparty(db: Session, vendor_name: str) -> list[CounterpartyRecord]:
+    """Counterparties whose legal name or an alias matches `vendor_name`, ignoring case, punctuation and
+    legal-form or country words. A suggestion for a person to confirm: it never links the vendor
+    (TenderRepository.set_vendor_counterparty does, when a person asks). Sorted by ID."""
+    wanted = vendor_name.strip().lower()
+    stem = _name_stem(vendor_name)
+    found = []
+    for record in db.query(CounterpartyRecord).order_by(CounterpartyRecord.id):
+        names = [record.legal_name, *(_load(record.aliases, []) or [])]
+        if any(n.strip().lower() == wanted or (stem and _name_stem(n) == stem) for n in names):
+            found.append(record)
+    return found
+
+
 def _current_version(bind: Engine, tables: set) -> Optional[int]:
     if "schema_version" not in tables:
         return None
@@ -809,6 +1094,18 @@ def _upgrade_v9_to_v10(conn: Connection) -> None:
     _add_missing_columns(conn, "tenders", {"findings": "TEXT"})
 
 
+def _upgrade_v10_to_v11(conn: Connection) -> None:
+    """Create the v11 tables, add the v11 columns (NULL for rows that exist) and the vendor counterparty index.
+    No vendor is linked to a counterparty. The caller records the version."""
+    Base.metadata.create_all(bind=conn)  # projects first: tenders.project_id refers to it
+    _add_missing_columns(conn, "tenders", {"project_id": "VARCHAR(64) REFERENCES projects (id)"})
+    _add_missing_columns(conn, "vendors", {"counterparty_id": "VARCHAR(64)"})
+    _add_missing_columns(conn, "source_documents", {"counterparty_id": "VARCHAR(64)", "amends": "VARCHAR(255)",
+                                                    "dated": "DATE"})
+    # SQLite's ALTER TABLE cannot add an index; this matches the one create_all makes.
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vendors_counterparty_id ON vendors (counterparty_id)"))
+
+
 def _upgrade_v6_to_v7(conn: Connection) -> None:
     """Add the reviewer columns (NULL for rows that exist). The caller records the version."""
     _add_missing_columns(conn, "adder_overrides", {"set_by": "VARCHAR(64)"})
@@ -871,10 +1168,11 @@ def init_db(bind: Optional[Engine] = None) -> None:
             _upgrade_v7_to_v8(conn)
             _upgrade_v8_to_v9(conn)
             _upgrade_v9_to_v10(conn)
+            _upgrade_v10_to_v11(conn)
             _write_version(conn)
         check_foreign_keys(bind)
         return
-    if version in (4, 5, 6, 7, 8, 9):
+    if version in (4, 5, 6, 7, 8, 9, 10):
         with bind.begin() as conn:
             if conn.dialect.name == "sqlite":
                 conn.exec_driver_sql("BEGIN")  # see the v2/v3 branch: the ALTER must roll back too
@@ -888,7 +1186,9 @@ def init_db(bind: Optional[Engine] = None) -> None:
                 _upgrade_v7_to_v8(conn)
             if version < 9:
                 _upgrade_v8_to_v9(conn)
-            _upgrade_v9_to_v10(conn)
+            if version < 10:
+                _upgrade_v9_to_v10(conn)
+            _upgrade_v10_to_v11(conn)
             _write_version(conn)
         check_foreign_keys(bind)
         return

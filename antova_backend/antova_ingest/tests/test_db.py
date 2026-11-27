@@ -146,7 +146,7 @@ def test_v3_fresh_init_has_new_columns(db_engine):
     init_db(db_engine)
     assert V3_TABLES <= set(inspect(db_engine).get_table_names())
     assert V3_TENDER_COLUMNS <= _tender_columns(db_engine)
-    assert _version(db_engine) == SCHEMA_VERSION == 10
+    assert _version(db_engine) == SCHEMA_VERSION == 11
 
 
 def test_upgrade_keeps_audit_rows(db_engine):

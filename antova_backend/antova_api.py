@@ -24,6 +24,7 @@ from antova_ingest import config
 from antova_ingest.pipeline import UnknownTender
 from antova_models import IngestJobRequest, JobStatusResponse
 from antova_review_api import router as review_router
+from antova_contract_api import router as contract_router
 from antova_upload_api import router as upload_router
 from antova_workers import job_manager
 
@@ -74,6 +75,7 @@ app.add_middleware(
 
 app.include_router(briefs_router)
 app.include_router(review_router)
+app.include_router(contract_router)
 app.include_router(upload_router)
 
 

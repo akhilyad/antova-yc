@@ -43,7 +43,7 @@ def test_canonical_json_is_sorted_and_writes_decimals_as_strings():
 
 def test_every_stage_has_a_hashed_json_artifact(result):
     assert list(result.artifacts) == list(artifacts.STAGE_NAMES) == [
-        "parsed", "located", "verified", "resolved", "checked", "priced", "leveled"]
+        "parsed", "located", "verified", "resolved", "checked", "priced", "leveled", "contracted"]
     for stage, artifact in result.artifacts.items():
         assert artifact.stage == stage
         assert artifact.sha256 == artifacts.sha256_text(artifact.body)
@@ -90,7 +90,8 @@ def test_rerun_rejects_an_unknown_stage(result):
 
 def test_fingerprint_covers_every_input(result):
     parts = result.fingerprint["parts"]
-    assert set(parts) == {"inputs", "ontology", "rules", "rate_table", "prompt", "locator_mode", "package_version"}
+    assert set(parts) == {"inputs", "ontology", "contract_ontology", "rules", "rate_table", "prompt", "locator_mode",
+                          "locate_provider", "locate_model", "zero_retention_ref", "package_version"}
     assert set(parts["inputs"]) == {"manifest.json", "MR-33kV-GIS-Rev4.pdf", "Bid_vendor-a_Nordwerk.pdf",
                                     VOLTSWITCH, "Bid_vendor-c_Deltaport.pdf"}
     assert parts["locator_mode"] == "answer_key"
@@ -165,3 +166,21 @@ def test_reingest_keeps_only_the_latest_runs_artifacts(tmp_path, expected, resul
         assert len(repo.get_stage_artifacts(changed.stats["run_id"])) == len(artifacts.STAGE_NAMES)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("module", ["exposure.py", "contract_ontology.py", "contract_terms.py", "contract_checks.py",
+                                    "budget.py", "contract_findings.py"])
+def test_a_contract_rule_change_alone_changes_the_fingerprint(tmp_path, monkeypatch, module):
+    # Ruling R34: the contract modules are rules of the run.
+    package = Path(artifacts.__file__).resolve().parent
+    copy = tmp_path / "antova_ingest"
+    shutil.copytree(package, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    monkeypatch.setattr(artifacts, "_PACKAGE_DIR", copy)
+    before = artifacts.run_fingerprint(PACK, "answer_key")
+    with (copy / module).open("a", encoding="utf-8") as f:
+        f.write("\n# an edited rule\n")
+    after = artifacts.run_fingerprint(PACK, "answer_key")
+    assert after["parts"]["rules"] != before["parts"]["rules"]
+    assert after["fingerprint"] != before["fingerprint"]
+    assert {k: v for k, v in after["parts"].items() if k != "rules"} == {
+        k: v for k, v in before["parts"].items() if k != "rules"}

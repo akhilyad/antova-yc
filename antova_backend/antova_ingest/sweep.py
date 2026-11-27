@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from antova_ingest.ontology import DEFAULT_EQUIPMENT_CLASS, PARAMETERS_BY_CLASS, ParameterDef, parameters_for
 from antova_ingest.parse import MIN_QUOTE_WORDS, citation_for_span, normalize, page_sentences, words_text
 from antova_ingest.types import Citation, FieldKind, ParsedDocument
-from antova_ingest.values import NEGATIVE_CONTEXT, NO_LD, clauses
+from antova_ingest.values import EVENT, NEGATIVE_CONTEXT, NO_LD, clauses
 
 _NUMBER = r"\d(?:[\d.,]*\d)?"
 # What a value of each kind looks like, loosely: enough to say "this sentence states one".
@@ -46,6 +46,13 @@ SIGNALS: dict[FieldKind, re.Pattern] = {
     "scope": re.compile(r"\bincluded?\b|\bincludes\b|\bincluding\b|excluded|not included|separately|by others|optional|"
                         r"on request|extra cost", re.IGNORECASE),
     "standard": re.compile(r"\b(?:IEC|IEEE|ANSI|EN|ISO|DIN|VDE|BS|UL|NEMA)\s*(?:[-/]\s*)?[A-Z]?\d{2,6}"),
+    # Contract terms.
+    "rate_per_period": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)[^.;]{0,60}?(?:\b(?:per|each|every)\b|/)\s*"
+                                  r"(?:\w+\s+)?(?:day|week)s?\b|\b(?:daily|weekly)\b", re.IGNORECASE),
+    "event": EVENT,
+    "milestone_list": re.compile(r"\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)", re.IGNORECASE),
+    "law": re.compile(r"\blaws?\b", re.IGNORECASE),
+    "forum": re.compile(r"arbitra\w*|\bcourts?\b|\b(?:DIS|ICC|LCIA)\b"),
 }
 _TERMS: dict[ParameterDef, re.Pattern] = {
     p: re.compile("|".join(f"(?:{term})" for term in p.sweep_terms), re.IGNORECASE)

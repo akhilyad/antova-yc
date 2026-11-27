@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
 from antova_auth import ReviewerPrincipal, require_review_token
+from antova_contract_api import contract_gate_open, latest_dispositions
 from antova_briefs_api import (
     LoadedTender, RatesBody, brief, evaluate, evidence_png, load_tender, not_found,
 )
@@ -30,7 +31,7 @@ from antova_models import (
 from antova_export import XLSX_TYPE, clarifications_xlsx, tbe_workbook
 from antova_ingest import clarify
 from antova_review import (
-    PROJECT_PREFIX, PROJECT_VENDOR, evidence_hash, open_items, project_field_hash, project_field_state, review_state,
+    CONTRACT_PREFIX, PROJECT_PREFIX, PROJECT_VENDOR, contract_cell_state, evidence_hash, open_items, project_field_hash, project_field_state, review_state,
 )
 
 _CENTS = Decimal("0.01")
@@ -84,6 +85,16 @@ def _editable(tender_id: str, db: Session = Depends(get_db)) -> LoadedTender:
     loaded = _loaded(db, tender_id)
     if loaded.meta.status == "VERIFIED":
         raise HTTPException(status_code=409, detail=OVERRIDES_LOCKED)
+    return loaded
+
+
+def _reviewable(tender_id: str, param_id: str, vendor_id: str, db: Session = Depends(get_db)) -> LoadedTender:
+    """The tender whose cell may be reviewed. A TBE cell is frozen while the brief is VERIFIED; a contract
+    (CT-) cell while the vendor's contract gate is VERIFIED, whatever the tender's TBE status."""
+    if not param_id.startswith(CONTRACT_PREFIX):
+        return _editable(tender_id, db)
+    loaded = _loaded(db, tender_id)
+    contract_gate_open(tender_id, vendor_id, db)
     return loaded
 
 
@@ -154,12 +165,24 @@ def list_reviews(tender_id: str, db: Session = Depends(get_db)):
 
 @router.put("/tenders/{tender_id}/reviews/{param_id}/{vendor_id}", response_model=ReviewPutResponse)
 def put_review(tender_id: str, param_id: str, vendor_id: str, body: ReviewBody,
-               loaded: LoadedTender = Depends(_editable), db: Session = Depends(get_db),
+               loaded: LoadedTender = Depends(_reviewable), db: Session = Depends(get_db),
                principal: ReviewerPrincipal = Depends(require_review_token)):
     """Record a decision on a cell, stamped with the hash of the evidence as it stands now.
 
-    The extracted data is never changed. To change a cell's adder, use the overrides route.
+    The extracted data is never changed. To change a cell's adder, use the overrides route. A CT- param id
+    is a contract cell of the vendor (stamped with the stored term's hash); it never counts toward the TBE.
     """
+    if param_id.startswith(CONTRACT_PREFIX):
+        term = next((t for t in TenderRepository(db).contract_terms(tender_id, vendor_id)
+                     if t["param_id"] == param_id), None)
+        if term is None:
+            raise not_found()
+        row = TenderRepository(db).add_review(tender_id, param_id, vendor_id, action=body.action,
+                                              reviewer=principal.id, note=body.note,
+                                              evidence_hash=term["evidence_hash"])
+        log.info("contract cell reviewed: tender=%s cell=%s/%s action=%s by=%s", tender_id, param_id, vendor_id,
+                 body.action, principal.id)
+        return {**row, "created_at": row["created_at"].isoformat(), "state": contract_cell_state(term, row)}
     if param_id.startswith(PROJECT_PREFIX):
         value = (loaded.tender.project or {}).get(param_id[len(PROJECT_PREFIX):])
         if value is None or vendor_id != PROJECT_VENDOR:
@@ -181,15 +204,27 @@ def put_review(tender_id: str, param_id: str, vendor_id: str, body: ReviewBody,
     return {**row, "created_at": row["created_at"].isoformat(), "state": review_state(cell, row)}
 
 
-def _clarification_rows(loaded: LoadedTender, vendor: str | None) -> list[dict]:
-    """The clarification questions, for one vendor when `vendor` is given (404 if it is not in the tender).
+def _clarification_rows(db: Session, loaded: LoadedTender, vendor: str | None) -> list[dict]:
+    """The clarification questions, for one vendor when `vendor` is given (404 if it is not in the tender),
+    then each vendor's negotiation questions (findings a reviewer marked `negotiate`).
 
     A vendor's rows quote only its own bid and the buyer's requirement: no other bidder's name, price or
-    citation, so one vendor's file can be sent to that vendor as it is.
+    citation, so one vendor's file can be sent to that vendor as it is. Negotiation rows cite only the
+    vendor's own documents and the framework agreement, never the owner contract.
     """
     if vendor is not None and vendor not in {v.id for v in loaded.tender.vendors}:
         raise not_found()
     rows = clarify.clarifications(loaded.tender)
+    tender_id = loaded.tender.id
+    findings = TenderRepository(db).contract_findings(tender_id)
+    documents = TenderRepository(db).list_documents(tender_id)
+    names = {v.id: v.name for v in loaded.tender.vendors}
+    for v in loaded.tender.vendors:
+        shareable = {d["filename"] for d in documents
+                     if d["vendor_id"] == v.id or d["role"] == "framework_agreement"}
+        rows += clarify.contract_rows([f for f in findings if f.get("vendor_id") == v.id],
+                                      latest_dispositions(db, tender_id, v.id), tender_id=tender_id,
+                                      vendor_names=names, shareable_files=shareable)
     return rows if vendor is None else [r for r in rows if r["vendor_id"] == vendor]
 
 
@@ -205,7 +240,7 @@ def clarifications_csv(tender_id: str, vendor: Annotated[str | None, Query(max_l
     `?vendor=<id>` limits it to one vendor, ready to send to them."""
     loaded = _loaded(db, tender_id)
     suffix = f"_{vendor}" if vendor else ""
-    return _attachment(clarify.to_csv(_clarification_rows(loaded, vendor)), "text/csv; charset=utf-8",
+    return _attachment(clarify.to_csv(_clarification_rows(db, loaded, vendor)), "text/csv; charset=utf-8",
                        f"Clarifications_{tender_id}{suffix}.csv")
 
 
@@ -215,7 +250,7 @@ def clarifications_xlsx_route(tender_id: str, vendor: Annotated[str | None, Quer
     """The same register as a spreadsheet."""
     loaded = _loaded(db, tender_id)
     suffix = f"_{vendor}" if vendor else ""
-    return _attachment(clarifications_xlsx(_clarification_rows(loaded, vendor)), XLSX_TYPE,
+    return _attachment(clarifications_xlsx(_clarification_rows(db, loaded, vendor)), XLSX_TYPE,
                        f"Clarifications_{tender_id}{suffix}.xlsx")
 
 
@@ -244,7 +279,8 @@ def export_tbe(tender_id: str, db: Session = Depends(get_db)):
     body = tbe_workbook(
         brief=payload, tender_title=loaded.tender.title, client=loaded.tender.client,
         equipment_class=loaded.tender.equipment_class, rate_table_version=loaded.tender.rate_table_version,
-        cells=cells, override_rows=repo.list_override_rows(tender_id), reviews=repo.list_reviews(tender_id),
+        cells=cells, override_rows=repo.list_override_rows(tender_id),
+        reviews=[r for r in repo.list_reviews(tender_id) if not r["param_id"].startswith(CONTRACT_PREFIX)],
         clarification_rows=clarify.clarifications(loaded.tender), verified_by=loaded.meta.verified_by,
         generated_at=datetime.now(timezone.utc))
     return _attachment(body, XLSX_TYPE, f"TBE_{tender_id}.xlsx")

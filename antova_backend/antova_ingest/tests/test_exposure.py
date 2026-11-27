@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 
 import antova_engine as engine
-from antova_ingest.exposure import delay_cost, ld_recovery_shortfall, liability_shortfall
+from antova_ingest.exposure import (back_to_back_ld_gap, delay_cost, ld_recovery_shortfall, liability_back_to_back,
+                                    liability_shortfall)
 from antova_ingest.pipeline import run_ingest
 from antova_ingest.tests.fakes import AnswerKeyLocator
 from samples import mutate
@@ -147,3 +148,99 @@ def test_a_vendors_true_price_adds_the_priced_exclusions_and_stays_a_lower_bound
     assert b["total_adders_low"] <= b["total_adders"] <= b["total_adders_high"]
     assert b["true_evaluated_low"] <= b["true_evaluated_price"] <= b["true_evaluated_high"]
     assert b["price_status"] == "UNPRICED_ITEMS"  # delivery, LD, liability and altitude gaps are still unpriced
+
+
+# --- back-to-back with the owner contract (Task 6) ------------------------------------------------------
+
+# Owner: EUR 10,000 a day, capped at EUR 1,000,000, all of it carried by this package.
+# Vendor: 0.5% of a EUR 2,000,000 order a day, capped at 10% (EUR 200,000).
+
+def _b2b(days, vendor_rate=(D("0.5"), "day"), share=D("100"), **kw):
+    return back_to_back_ld_gap(D("10000"), D("1000000"), share, vendor_rate, D("10"), D("2000000"), days,
+                               currency="EUR", **kw)
+
+
+def test_back_to_back_gap():
+    e = _b2b(D("28"))
+    assert (e.kind, e.amount) == ("back_to_back_ld", D("80000.00"))  # 280,000 owed − 200,000 at the vendor's cap
+    assert "EUR 280,000.00" in e.formula and "EUR 200,000.00" in e.formula
+
+
+def test_back_to_back_true_zero():
+    assert _b2b(D("14")).amount == D("0.00")  # 140,000 owed, 140,000 paid back
+
+
+def test_back_to_back_weekly_rate():
+    weekly = _b2b(D("28"), vendor_rate=(D("3.5"), "week"))
+    assert weekly.amount == _b2b(D("28")).amount and "28/7" in weekly.formula
+
+
+def test_back_to_back_share_missing():
+    e = _b2b(D("28"), share=None)
+    assert e.amount is None and "share of owner LDs" in e.reason
+
+
+def test_back_to_back_shows_the_delay_in_weeks():
+    assert "4 weeks × 7 = 28 days" in _b2b(D("28"), delay_weeks=D("4")).formula
+
+
+def test_back_to_back_any_missing_input_is_none():
+    def gap(*args):
+        return back_to_back_ld_gap(*args, currency="EUR")
+    assert gap(None, D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1")).amount is None
+    assert gap(D("1"), D("1"), D("100"), None, D("10"), D("1"), D("1")).amount is None
+    assert "delay" in gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), None).reason
+
+
+def test_liability_back_to_back():
+    def gap(*args):
+        return liability_back_to_back(*args, currency="EUR")
+    e = gap(D("500000"), D("10"), D("2000000"))
+    assert (e.kind, e.amount) == ("back_to_back_liability", D("300000.00"))
+    assert gap(D("500000"), D("30"), D("2000000")).amount == D("0.00")
+    assert gap(D("500000"), 12.5, D("2000000")).amount == D("250000.00")  # float percent read exactly
+    assert gap(D("500000"), None, D("2000000")).amount is None
+
+
+def test_back_to_back_gap_formulas_show_the_clamp_at_zero():
+    assert "gap max(EUR 140,000.00 − EUR 140,000.00, 0) = EUR 0.00" in _b2b(D("14")).formula
+    zero = liability_back_to_back(D("500000"), D("30"), D("2000000"), currency="EUR")
+    assert ("gap max(owner cap EUR 500,000.00 − vendor 30% × EUR 2,000,000.00 (EUR 600,000.00), 0) = EUR 0.00"
+            in zero.formula)
+
+
+def test_shown_steps_round_like_the_result():
+    # Owed is exactly EUR 0.005: shown half up (0.01), as the amount is, never 0.00 beside a 0.01 result.
+    e = back_to_back_ld_gap(D("0.005"), D("100"), D("100"), None, None, None, D("1"), currency="EUR",
+                            vendor_provides_no_lds=True)
+    assert e.amount == D("0.01")
+    assert "share = EUR 0.01" in e.formula and "max(EUR 0.01 − EUR 0.00, 0) = EUR 0.01" in e.formula
+
+
+def test_gap_is_taken_from_the_rounded_figures_so_the_formula_adds_up():
+    # Ruling R28: owed 100.005 -> 100.01 and paid back 50.004 -> 50.00 are rounded first; the gap is their
+    # difference (the exact 50.001 would round to 50.00 beside "100.01 − 50.00").
+    e = back_to_back_ld_gap(100.005, 1e6, 100, (0.5, "day"), 100, 10000.8, 1, currency="EUR")
+    assert e.amount == D("50.01")
+    assert "max(EUR 100.01 − EUR 50.00, 0) = EUR 50.01" in e.formula
+    liability = liability_back_to_back(D("100.005"), D("0.5"), D("10000.8"), currency="EUR")
+    assert liability.amount == D("50.01") and "= EUR 50.01" in liability.formula
+
+
+def test_a_zero_gap_is_shown_to_the_cent():
+    assert str(liability_back_to_back(100, 10, 2000000, currency="EUR").amount) == "0.00"
+    assert str(_b2b(D("14")).amount) == "0.00"
+
+
+def test_vendor_with_no_lds_pays_back_nothing():
+    e = back_to_back_ld_gap(D("10000"), D("1000000"), D("50"), None, None, None, D("28"), currency="EUR",
+                            vendor_provides_no_lds=True)
+    assert e.amount == D("140000.00")  # 280,000 owed × 50% share, nothing paid back
+    assert "no liquidated damages" in e.formula
+
+
+def test_back_to_back_currency_has_no_default():
+    with pytest.raises(TypeError):
+        back_to_back_ld_gap(D("1"), D("1"), D("100"), (D("1"), "day"), D("10"), D("1"), D("1"))
+    with pytest.raises(TypeError):
+        liability_back_to_back(D("1"), D("10"), D("1"))

@@ -185,3 +185,43 @@ def to_csv(rows: list[dict]) -> str:
     writer.writeheader()
     writer.writerows({k: spreadsheet_safe(v) if isinstance(v, str) else v for k, v in row.items()} for row in rows)
     return buffer.getvalue()
+
+
+def contract_rows(findings: list[dict], dispositions: list[dict], *, shareable_files: set[str], tender_id: str = "",
+                  vendor_names: dict[str, str] | None = None) -> list[dict]:
+    """One negotiation question per finding whose latest disposition is `negotiate`.
+
+    A fixed template per contract parameter: the question names the term and the pages it rests on, never
+    the finding's message, so the buyer's budget, owner contract figures and exposures stay out of a file
+    sent to the vendor. A disposition that is stale (the finding changed or is gone) asks nothing until a
+    reviewer decides again. `shareable_files` (required: there is no unfiltered default) limits the citations
+    to those documents: the vendor's own bid and the framework agreement, never the owner contract.
+    """
+    from antova_ingest.contract_ontology import CONTRACT_PARAMS_BY_ID
+
+    by_id = {f["id"]: f for f in findings}
+    names = vendor_names or {}
+    rows: list[dict] = []
+    for d in dispositions:
+        finding = by_id.get(d["finding_id"])
+        if d["disposition"] != "negotiate" or finding is None or finding.get("evidence_hash") != d["evidence_hash"]:
+            continue
+        param_id = finding.get("param_id")
+        param = CONTRACT_PARAMS_BY_ID.get(param_id) if param_id else None
+        citations = [c for c in finding.get("citations") or []
+                     if c.get("filename") in shareable_files]
+        cited = _cite(*citations)
+        at = f" (see {cited})" if cited else ""
+        if param is None:
+            question = (f"We would like to discuss the price in your offer{at}. "
+                        f"State your best price for the complete scope, with its currency.")
+        else:
+            question = (f"We would like to negotiate {param.name.lower()} in your offer{at}. "
+                        f"State your best position on {param.name.lower()}, with the clause wording you propose.")
+        rows.append({
+            "tender_id": tender_id, "vendor_id": finding["vendor_id"],
+            "vendor_name": names.get(finding["vendor_id"], ""),
+            "param_id": param_id or "", "param_name": param.name if param else "",
+            "kind": "negotiation", "question": " ".join(question.split()), "citations": cited,
+        })
+    return rows

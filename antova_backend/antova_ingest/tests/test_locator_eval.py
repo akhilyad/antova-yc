@@ -132,3 +132,61 @@ def test_an_api_error_is_reported_per_document_not_raised(tmp_path, capsys):
     pack = locator_eval.score_pack(folder, Failing())
     assert len(pack["missing"]) == 4 and "APIConnectionError" in pack["missing"][0]["reason"]
     assert pack["locator"] == "test-model" and pack["pipeline"]["ran"] is False
+
+
+def _with_contract_documents(folder, synthetic):
+    shutil.copy(folder / VOLTSWITCH, folder / "FA-vendor-b.pdf")
+    shutil.copy(folder / "MR-33kV-GIS-Rev4.pdf", folder / "Owner-contract.pdf")
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest["synthetic"] = synthetic
+    manifest["documents"] += [
+        {"file": "FA-vendor-b.pdf", "role": "framework_agreement", "counterparty_id": "vendor-b", "dated": "2025-03-01"},
+        {"file": "Owner-contract.pdf", "role": "owner_contract"},
+    ]
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+class _Recording:
+    def __init__(self, stored):
+        self.stored, self.model, self.sent = stored, stored.model, []
+        self.sends_text = stored.sends_text
+
+    def locate(self, doc, *, contract=False):
+        self.sent.append((doc.entry.file, contract))
+        return self.stored.locate(doc, contract=contract)
+
+
+def test_contract_documents_are_held_back_without_a_zero_retention_reference(tmp_path, ideal, monkeypatch):
+    # The scorecard sends contract text to a provider only past the same guard as the pipeline.
+    monkeypatch.delenv("ANTOVA_ZERO_RETENTION_REF", raising=False)
+    folder = _pack(tmp_path)
+    _with_contract_documents(folder, synthetic=False)
+    _store(folder, ideal)
+    recording = _Recording(locator_eval.stored_locator(folder, live=False))
+    pack = locator_eval.score_pack(folder, recording)
+    assert {"FA-vendor-b.pdf", "Owner-contract.pdf"}.isdisjoint(file for file, _ in recording.sent)
+    assert not any(contract for _, contract in recording.sent)  # nor the bids' contract terms
+    assert pack["missing"] == [] and len(pack["documents"]) == 4
+    assert pack["held"] == ["FA-vendor-b.pdf", "Owner-contract.pdf"]
+    assert pack["pipeline"]["ran"] and pack["pipeline"]["mismatches"] == []
+    assert "not located: FA-vendor-b.pdf" in locator_eval.format_report([pack])
+
+
+def test_contract_documents_are_located_with_a_zero_retention_reference(tmp_path, ideal, monkeypatch):
+    monkeypatch.setenv("ANTOVA_ZERO_RETENTION_REF", "DPA-2026-11")
+    folder = _pack(tmp_path)
+    _with_contract_documents(folder, synthetic=False)
+    _store(folder, ideal)
+    empty = LocateResponse(page_sections=[], candidates=[], tender_facts=[], headline_price=None, cover_claim=None)
+    store = ResponseStore(folder / "saved_responses")
+    for entry in load_manifest(folder).documents:
+        if entry.role != "mr_spec":
+            doc = parse_document(folder, entry)
+            store.save(store.key_for(doc, contract=True), LocateOutcome(empty, 1_000, 100, False, "test-model"),
+                       doc, contract=True)
+    recording = _Recording(locator_eval.stored_locator(folder, live=False))
+    pack = locator_eval.score_pack(folder, recording)
+    assert ("FA-vendor-b.pdf", True) in recording.sent and ("FA-vendor-b.pdf", False) not in recording.sent
+    assert recording.sent.count((VOLTSWITCH, True)) == 1  # remembered: the pipeline run reused it
+    assert pack["held"] == [] and pack["missing"] == []
+    assert pack["pipeline"]["ran"] and pack["pipeline"]["mismatches"] == []

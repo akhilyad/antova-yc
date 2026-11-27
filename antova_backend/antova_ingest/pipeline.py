@@ -6,6 +6,7 @@ in one transaction.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -20,8 +21,10 @@ from typing import Callable
 import anthropic
 
 import antova_engine as engine
-from antova_ingest import artifacts, codec, config, costs, extract, findings, sweep
+from antova_ingest import artifacts, codec, config, contract_findings, costs, extract, findings, sweep
 from antova_ingest.artifacts import STAGE_NAMES, StageArtifact
+from antova_ingest.contract_ontology import CONTRACT_PARAMETERS, CONTRACT_PARAMS_BY_ID, CONTRACT_ROLES
+from antova_ingest.contract_terms import contract_evidence
 from antova_ingest.costs import ConfigError, Pricing, load_rate_table, price
 from antova_ingest.extract import DocumentTooLarge, ExtractError, LocateInvalid, LocateOutcome, LocateRefused, Locator
 from antova_ingest.ontology import (
@@ -273,7 +276,7 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
         except DocumentUnreadable as exc:
             if entry.role == "mr_spec":
                 raise _failed(exc) from exc
-            warnings.append(f"{entry.vendor_id}: {exc.reason}")
+            warnings.append(f"{entry.vendor_id or entry.file}: {exc.reason}")
             documents.append({"file": entry.file, "sha256": _sha256(tender_dir / entry.file),
                               "unreadable": exc.reason, "pages": []})
             continue
@@ -293,8 +296,51 @@ def stage_parsed(tender_dir: Path, manifest: TenderManifest) -> dict:
     return {"manifest": dumped, "documents": documents, "warnings": warnings}
 
 
+# The zero-retention guard (spec 9.9). Contract text goes to a model provider only when the deployment
+# names its zero-retention agreement, or the tender is synthetic.
+_ZERO_RETENTION_REASON = ("Contract documents go only to a model provider with a zero-retention agreement; "
+                          "set ANTOVA_ZERO_RETENTION_REF.")
+
+
+def contract_text_allowed(locator: Locator, manifest: TenderManifest) -> bool:
+    """Whether this locator may be given contract text for this tender.
+
+    A locator that keeps the text in the process (sends_text False, the answer key) always may. One
+    that does not say is treated as sending it.
+    """
+    return (not getattr(locator, "sends_text", True) or manifest.synthetic
+            or config.zero_retention_reference() is not None)
+
+
+def contract_refused_warning(file: str) -> str:
+    """The warning for a contract document held back by the zero-retention guard."""
+    return f"{file}: not read. {_ZERO_RETENTION_REASON}"
+
+
+def contract_pass_refused_warning(file: str) -> str:
+    """The warning for a vendor bid whose contract-terms pass the guard held back (its equipment pass ran)."""
+    return f"{file}: contract terms not read. {_ZERO_RETENTION_REASON}"
+
+
+def needs_contract_pass(manifest: TenderManifest) -> bool:
+    """A tender goes to contract approval when it has a contract document, buyer-entered owner terms or
+    a frozen budget (an approval sheet for a single direct offer, ruling R23); only then are its bids
+    located a second time, for their contract terms."""
+    project = manifest.project
+    return (any(entry.role in CONTRACT_ROLES for entry in manifest.documents)
+            or bool(project and (project.owner_terms or project.frozen_budget)))
+
+
+_CONTRACT_PARAM_IDS = [p.id for p in CONTRACT_PARAMETERS]
+
+
 def stage_located(bodies: dict, locator: Locator) -> dict:
     """Locate every readable document, up to locate_concurrency() at a time.
+
+    The MR and each bid get the equipment pass. A contract document gets only the contract-terms
+    pass, and a bid gets that pass too when the tender goes to contract approval; the zero-retention
+    guard holds both back. Contract answers are kept apart (`contract_outcomes`, each with the
+    parameter ids it answers), so contract and equipment evidence never mix.
 
     Results are taken in manifest order, so the artifact does not depend on which call finished
     first. A failure that fails the ingest cancels the calls not yet started; the ones already
@@ -302,49 +348,87 @@ def stage_located(bodies: dict, locator: Locator) -> dict:
     """
     manifest = _manifest(bodies)
     docs = _documents(bodies, manifest)
-    jobs = [(entry, docs[entry.file]) for entry in manifest.documents if entry.file in docs]
-    outcomes: dict[str, dict] = {}
-    failed: list[str] = []
+    allowed = contract_text_allowed(locator, manifest)
+    second_pass = needs_contract_pass(manifest)
+    jobs: list[tuple] = []  # (entry, doc, contract)
     warnings: list[str] = []
+    for entry in manifest.documents:
+        if entry.file not in docs:
+            continue
+        if entry.role in CONTRACT_ROLES:
+            if allowed:
+                jobs.append((entry, docs[entry.file], True))
+            else:
+                warnings.append(contract_refused_warning(entry.file))
+            continue
+        jobs.append((entry, docs[entry.file], False))
+        if entry.role == "vendor_bid" and second_pass:
+            if allowed:
+                jobs.append((entry, docs[entry.file], True))
+            else:
+                warnings.append(contract_pass_refused_warning(entry.file))
+    outcomes: dict[str, dict] = {}
+    contract_outcomes: dict[str, dict] = {}
+    failed: list[str] = []
     with ThreadPoolExecutor(max_workers=max(1, min(locate_concurrency(), len(jobs)))) as pool:
-        futures = [pool.submit(locator.locate, doc) for _, doc in jobs]
+        # The equipment pass is called exactly as before, so a locator that knows only it still works.
+        futures = [pool.submit(locator.locate, doc, contract=True) if contract else pool.submit(locator.locate, doc)
+                   for _, doc, contract in jobs]
         try:
-            for (entry, _doc), future in zip(jobs, futures):
+            for (entry, _doc, contract), future in zip(jobs, futures):
+                label = f"{entry.file} (contract terms)" if contract else entry.file
                 try:
                     outcome = future.result()
                 except _DEGRADES_BID as exc:
                     if entry.role == "mr_spec":
                         raise _failed(exc) from exc
-                    failed.append(entry.vendor_id)
-                    warnings.append(f"{entry.vendor_id}: {exc}")
+                    if contract:  # the contract terms are missing; a bid's equipment evaluation stands
+                        warnings.append(f"{label}: {exc}")
+                        continue
+                    if entry.vendor_id:
+                        failed.append(entry.vendor_id)
+                    warnings.append(f"{entry.vendor_id or entry.file}: {exc}")
                     continue
                 except (ExtractError, anthropic.APIError) as exc:
                     raise _failed(exc) from exc
-                asked = getattr(locator, "model", extract.MODEL)
-                if outcome.model and outcome.model != asked:
-                    warnings.append(f"{entry.file}: answered by fallback model {outcome.model}, not {asked}")
-                record = {
-                    "response": outcome.response.model_dump(mode="json"),
-                    "input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens,
-                    "from_store": outcome.from_store, "model": outcome.model,
-                }
-                prices = getattr(locator, "prices", None)
-                if prices is not None:  # a model priced differently from the model: its own rates, in the artifact
-                    record["prices"] = [str(prices[0]), str(prices[1])]
-                windows = getattr(outcome, "windows", None)
-                if windows:
-                    record["windows"] = [list(w) for w in windows]
-                    spans = ", ".join(f"p.{a}-{b}" for a, b in windows)
-                    warnings.append(f"{entry.file}: too long for one call; located in {len(windows)} "
-                                    f"overlapping page windows ({spans})")
-                outcomes[entry.file] = record
+                record = _located_record(locator, outcome, label, warnings)
+                if contract:
+                    record["param_ids"] = list(_CONTRACT_PARAM_IDS)
+                    contract_outcomes[entry.file] = record
+                else:
+                    outcomes[entry.file] = record
         except BaseException:
             for future in futures:
                 future.cancel()
             raise
+    every = [*outcomes.values(), *contract_outcomes.values()]
     ingest_mode = getattr(locator, "ingest_mode_label", None) or (
-        "replay" if outcomes and all(o["from_store"] for o in outcomes.values()) else "live")
-    return {"outcomes": outcomes, "failed_vendors": failed, "warnings": warnings, "ingest_mode": ingest_mode}
+        "replay" if every and all(o["from_store"] for o in every) else "live")
+    body = {"outcomes": outcomes, "failed_vendors": failed, "warnings": warnings, "ingest_mode": ingest_mode}
+    if contract_outcomes:  # left out when there are none, so a tender without contract terms stores what it did
+        body["contract_outcomes"] = contract_outcomes
+    return body
+
+
+def _located_record(locator: Locator, outcome: LocateOutcome, label: str, warnings: list[str]) -> dict:
+    asked = getattr(locator, "model", extract.MODEL)
+    if outcome.model and outcome.model != asked:
+        warnings.append(f"{label}: answered by fallback model {outcome.model}, not {asked}")
+    record = {
+        "response": outcome.response.model_dump(mode="json"),
+        "input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens,
+        "from_store": outcome.from_store, "model": outcome.model,
+    }
+    prices = getattr(locator, "prices", None)
+    if prices is not None:  # a model priced differently from the model: its own rates, in the artifact
+        record["prices"] = [str(prices[0]), str(prices[1])]
+    windows = getattr(outcome, "windows", None)
+    if windows:
+        record["windows"] = [list(w) for w in windows]
+        spans = ", ".join(f"p.{a}-{b}" for a, b in windows)
+        warnings.append(f"{label}: too long for one call; located in {len(windows)} "
+                        f"overlapping page windows ({spans})")
+    return record
 
 
 def _responses(bodies: dict) -> dict[str, extract.LocateResponse]:
@@ -357,7 +441,10 @@ def stage_verified(bodies: dict) -> dict:
     by_id = params_by_id_for(manifest.equipment_class)
     docs = _documents(bodies, manifest)
     responses = _responses(bodies)
-    for file, response in responses.items():
+    contract_responses = {file: extract.LocateResponse.model_validate(o["response"])
+                          for file, o in bodies["located"].get("contract_outcomes", {}).items()}
+    # A bid's pages are labeled by its equipment pass; the contract pass labels a contract document's.
+    for file, response in [*responses.items(), *contract_responses.items()]:
         labels = {ps.page: ps.section for ps in response.page_sections}
         for page in docs[file].pages:
             if page.section == "unlabeled":
@@ -416,7 +503,7 @@ def stage_verified(bodies: dict) -> dict:
     roles = {d.file: d.role for d in manifest.documents}
     sweep_hits: dict[str, list[dict]] = {}
     located = refound = new = 0
-    for file in responses:
+    for file in responses:  # equipment passes only: a contract document has none, so it is not swept
         hits = sweep.sweep_document(docs[file], manifest.equipment_class)
         sweep_hits[file] = [{"param_id": h.param_id, "page": h.citation.page, "quote": h.citation.quote} for h in hits]
         cited = [(row["param_id"], Citation.from_dict(row["citation"])) for row in citations[file]]
@@ -429,12 +516,43 @@ def stage_verified(bodies: dict) -> dict:
                 citations[file].append({"param_id": hit.param_id, "citation": hit.citation.to_dict(), "source": "sweep"})
                 cited.append((hit.param_id, hit.citation))
                 new += 1
-    return {
+    body = {
         "sections": {file: [p.section for p in doc.pages] for file, doc in docs.items()},
         "citations": citations, "accepted": accepted, "rejected": rejected,
         "bay_count": bay_count, "headline": headline, "cover": cover, "warnings": [],
         "sweep_hits": sweep_hits, "locales": locales, "commissioning_lag": commissioning_lag,
         "sweep": {"hits": sum(len(h) for h in sweep_hits.values()), "new": new, "located": located, "refound": refound},
+        "not_stated": {file: {ns.param_id: ns.pages_searched for ns in response.not_stated}
+                       for file, response in responses.items()},
+    }
+    if contract_responses:  # left out when there are none, so a tender without contract terms stores what it did
+        body["contract"] = _verified_contract(bodies["located"]["contract_outcomes"], contract_responses, docs)
+    return body
+
+
+def _verified_contract(records: dict, responses: dict[str, extract.LocateResponse],
+                       docs: dict[str, ParsedDocument]) -> dict:
+    """The contract passes' candidates whose quote is on its page, kept apart from equipment citations.
+
+    A candidate counts only for a parameter its pass was asked about (the record's param_ids), so an
+    equipment id in a contract answer is rejected, as a contract id in an equipment answer is.
+    """
+    citations: dict[str, list[dict]] = {}
+    accepted = rejected = 0
+    for file, response in responses.items():
+        asked = set(records[file]["param_ids"]) & set(CONTRACT_PARAMS_BY_ID)
+        rows = []
+        for candidate in response.candidates:
+            citation = (verify_quote(docs[file], candidate.page, candidate.quote)
+                        if candidate.param_id in asked else None)
+            if citation is None:
+                rejected += 1
+                continue
+            accepted += 1
+            rows.append({"param_id": candidate.param_id, "citation": citation.to_dict(), "source": "locator"})
+        citations[file] = rows
+    return {
+        "citations": citations, "accepted": accepted, "rejected": rejected,
         "not_stated": {file: {ns.param_id: ns.pages_searched for ns in response.not_stated}
                        for file, response in responses.items()},
     }
@@ -467,7 +585,9 @@ def read_values(param_id: str, citation: Citation, locale: str,
     values: dict = {}
     notes: list[dict] = []
     where = f"p.{citation.page}"
-    for f in params_by_id_for(equipment_class)[param_id].fields:
+    # A contract term (CT-xx) is read with the contract ontology, whatever the equipment class.
+    param = CONTRACT_PARAMS_BY_ID.get(param_id) or params_by_id_for(equipment_class)[param_id]
+    for f in param.fields:
         value = parse_field(f.kind, text, f.name)
         if value is None:
             if f.kind == "standard" and standard_exception(text):
@@ -487,7 +607,7 @@ def read_values(param_id: str, citation: Citation, locale: str,
                                      f"{low} to {high}; value not used"})
             continue
         values[f.name] = value
-    unread = [f for f in params_by_id_for(equipment_class)[param_id].fields if f.kind in _NUMERIC_KINDS and f.name not in values]
+    unread = [f for f in param.fields if f.kind in _NUMERIC_KINDS and f.name not in values]
     if ambiguous and unread:
         notes.append({"code": "AMBIGUOUS_NUMBER",
                       "message": f"ambiguous number {', '.join(repr(t) for t in ambiguous)} on {where}: nothing in the "
@@ -685,13 +805,14 @@ def stage_leveled(bodies: dict) -> dict:
     resolutions = {k: codec.resolution_from_plain(v) for k, v in bodies["checked"]["resolutions"].items()}
     pricings = {k: codec.pricing_from_plain(v) for k, v in bodies["priced"]["pricings"].items()}
     table = bodies["priced"]["rate_table"]
-    warnings = [w for stage in STAGE_NAMES[:-1] for w in bodies[stage]["warnings"]]
+    warnings = [w for stage in STAGE_NAMES[:STAGE_NAMES.index("leveled")] for w in bodies[stage]["warnings"]]
 
-    input_tokens = sum(o["input_tokens"] for o in located["outcomes"].values())
-    output_tokens = sum(o["output_tokens"] for o in located["outcomes"].values())
+    every_call = [*located["outcomes"].values(), *located.get("contract_outcomes", {}).values()]
+    input_tokens = sum(o["input_tokens"] for o in every_call)
+    output_tokens = sum(o["output_tokens"] for o in every_call)
     cost = sum((
         extract.api_cost_usd(o["input_tokens"], o["output_tokens"], *(Decimal(p) for p in o.get("prices", ())))
-        for o in located["outcomes"].values()), Decimal("0"))
+        for o in every_call), Decimal("0"))
     page_counts = {d["file"]: len(d["pages"]) for d in parsed["documents"]}
     vendors = [
         engine.Vendor(
@@ -801,11 +922,37 @@ def stage_leveled(bodies: dict) -> dict:
     return {"tender": tender.model_dump(mode="json"), "stats": stats, "warnings": []}
 
 
+def stage_contracted(bodies: dict) -> dict:
+    """The contract terms, their checks and gaps, the budget lines and the contract findings, per vendor.
+
+    Runs after "leveled" and reads the earlier stages only, so it never changes them: contract evidence stays
+    out of the equipment stages (R20). A tender that does not go to contract approval (needs_contract_pass)
+    gets the empty body. The true job cost is the leveled stage's true evaluated price; a lower bound (some
+    gap unpriced) or no headline is not known.
+    """
+    manifest = _manifest(bodies)
+    if not needs_contract_pass(manifest):
+        return copy.deepcopy(contract_findings.EMPTY_BODY)
+    evidence, _notes = contract_evidence(bodies["verified"], manifest, _failed_vendors(bodies, manifest))
+    prices = {}
+    for vendor_id, head in bodies["resolved"]["headlines"].items():
+        citation = head["citation"]
+        prices[vendor_id] = (read_price(citation["quote"]) if citation else None,
+                             Citation.from_dict(citation) if citation else None)
+    tender = engine.TenderPackage.model_validate(bodies["leveled"]["tender"])
+    true_job_costs = {}
+    for f in engine.evaluate_vendor_financials(tender, engine.SensitivitySettings(), []):
+        known = f["price_status"] == "PRICED" and f["true_evaluated_price"] is not None
+        true_job_costs[f["vendor_id"]] = ((Decimal(str(f["true_evaluated_price"])), f["currency"]) if known
+                                          else (None, None))
+    return contract_findings.assess(manifest, evidence, prices, true_job_costs)
+
+
 _STAGE_FUNCTIONS: dict[str, Callable[[dict], dict]] = {
     "verified": stage_verified, "resolved": stage_resolved, "checked": stage_checked,
-    "priced": stage_priced, "leveled": stage_leveled,
+    "priced": stage_priced, "leveled": stage_leveled, "contracted": stage_contracted,
 }
-# The progress label reported when each stage finishes (the leveled stage has none).
+# The progress label reported when each stage finishes (the leveled and contracted stages have none).
 _STAGE_PROGRESS = dict(zip(STAGE_NAMES, STAGES[1:]))
 
 
@@ -822,7 +969,8 @@ def _finish(arts: dict[str, StageArtifact], fingerprint: dict, started: float, s
         entry = entries[data["file"]]
         blank = [p["number"] for p in data["pages"] if not p["has_text"]]
         documents.append(SourceDocumentInfo(entry.file, entry.role, entry.vendor_id, data["sha256"],
-                                            len(data["pages"]), blank))
+                                            len(data["pages"]), blank, counterparty_id=entry.counterparty_id,
+                                            amends=entry.amends, dated=entry.dated))
     stats = dict(leveled["stats"])
     stats["duration_s"] = round(duration, 2)
     stats["run_fingerprint"] = fingerprint.get("fingerprint", "")
@@ -896,7 +1044,9 @@ def run_ingest(tender_dir: Path, mode: str = "auto", progress: Callable[[str, in
     if locator is None:
         locator = extract.make_locator(tender_dir, mode)
     locator_mode = getattr(locator, "ingest_mode_label", None) or getattr(locator, "mode", None) or mode
-    fingerprint = artifacts.run_fingerprint(tender_dir, str(locator_mode))
+    fingerprint = artifacts.run_fingerprint(tender_dir, str(locator_mode),
+                                            locate_provider=str(getattr(locator, "provider", "") or ""),
+                                            locate_model=str(getattr(locator, "model", "") or ""))
     report(*STAGES[0])
 
     arts: dict[str, StageArtifact] = {}

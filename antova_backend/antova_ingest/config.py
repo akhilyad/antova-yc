@@ -8,6 +8,8 @@ before every ingest, so a gap never shows up as a KeyError halfway through a run
 
 from __future__ import annotations
 
+import os
+
 from antova_ingest import costs, sweep, values
 from antova_ingest.costs import ConfigError, RateTable
 from antova_ingest.ontology import ORDINALS, PARAMETERS_BY_CLASS, parameters_for
@@ -17,6 +19,16 @@ PARSED_KINDS = frozenset(values.FIELD_PARSERS) | frozenset(values.NAME_PARSERS) 
 OPERATORS = frozenset({"ge", "le", "eq", "ord", "all"})
 
 _checked = False
+
+# The deployment setting that declares the configured locate provider zero-retention (spec 9.9): a
+# reference to the written agreement, such as its document name and date. Unset, contract documents
+# are never sent to a model provider (unless the tender is synthetic).
+ZERO_RETENTION_VARIABLE = "ANTOVA_ZERO_RETENTION_REF"
+
+
+def zero_retention_reference() -> str | None:
+    """ANTOVA_ZERO_RETENTION_REF, stripped; None when unset or empty."""
+    return (os.environ.get(ZERO_RETENTION_VARIABLE) or "").strip() or None
 
 
 def rate_table_names() -> list[str]:
