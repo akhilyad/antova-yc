@@ -4,6 +4,7 @@ pydantic==2.12.5
 sqlalchemy==2.0.48
 pint==0.26.2
 pymupdf==1.27.2.3
+pypdf==7.0.0
 reportlab==5.1.0
 anthropic==0.97.0
 httpx==0.28.1
