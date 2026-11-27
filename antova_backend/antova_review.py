@@ -294,6 +294,9 @@ _RUN_COST_TENDER = ("compute_cogs",)
 _CONTRACT_DOC_ROLES = ("framework_agreement", "owner_contract")
 _CONTRACT_FINDING_CATEGORIES = ("fa_conformance", "back_to_back", "budget", "missing")  # approvers.CATEGORIES
 _CONTRACT_KEYS = ("contract", "contract_terms", "contracted", "cas")
+# Project fields that are the buyer's commercial position: the owner contract's terms and the frozen budget.
+_PRIVATE_PROJECT_FIELDS = ("owner_terms", "frozen_budget")
+_PRIVATE_PROJECT_ITEMS = tuple(PROJECT_PREFIX + name for name in _PRIVATE_PROJECT_FIELDS)
 
 
 def _is_contract_finding(finding: Mapping[str, Any]) -> bool:
@@ -325,8 +328,11 @@ def _without_contract_files(stats: dict[str, Any], names: set[str]) -> dict[str,
 
 def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """A copy of a `brief_payload` result for GET /api/briefs/{share_id}: without Antova's run cost, and
-    without contract documents, contract terms (CT- parameters), contract findings or the CAS."""
+    without contract documents, contract terms (CT- parameters), contract findings or the CAS, and without the
+    project's owner terms and frozen budget (or any open item for them)."""
     tender = {k: v for k, v in payload["tender"].items() if k not in _RUN_COST_TENDER + _CONTRACT_KEYS}
+    if tender.get("project") is not None:
+        tender["project"] = {k: v for k, v in tender["project"].items() if k not in _PRIVATE_PROJECT_FIELDS}
     if tender.get("parameters") is not None:
         tender["parameters"] = [p for p in tender["parameters"]
                                 if not str(p.get("id") or "").startswith(CONTRACT_PREFIX)]
@@ -342,5 +348,7 @@ def public_brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "stage_log": [e for e in payload.get("stage_log") or []
                       if "contract" not in str(e.get("stage", "")).lower()],
         "documents": [d for d in payload.get("documents") or [] if d.get("role") not in _CONTRACT_DOC_ROLES],
+        "open_items": [i for i in payload.get("open_items") or []
+                       if i.get("param_id") not in _PRIVATE_PROJECT_ITEMS],
         "tender": tender,
     }

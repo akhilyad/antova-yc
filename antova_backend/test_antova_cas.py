@@ -419,3 +419,30 @@ def test_price_history_fewer_than_three(with_capacity):
     _history_rows(("1800000", "EUR"), ("2000000", "EUR"))
     field = with_capacity.get(CAS, headers=PIA).json()["price"]["history"]
     assert field["state"] == "missing" and field["reason"] == "fewer than 3 comparable past offers"
+
+
+# --- final review C and D ------------------------------------------------------------------------------
+
+def _ld_term(values):
+    return {"param_id": "CT-01", "vendor_id": "vendor-b", "state": "cited", "flags": [], "fa": None, "owner": None,
+            "offered": ({"kind": "document", "values": values, "citations": [_citation(BID.file, "LDs")],
+                         "inherited_fields": []} if values is not None else None)}
+
+
+def test_an_offer_with_no_ld_terms_has_its_own_ld_shortfall_reason():
+    from antova_cas import _lds
+    for terms in (_Terms([], []), _Terms([_ld_term(None)], []), _Terms([_ld_term({})], [])):
+        field = _lds([], "vendor-b", terms)["ld_shortfall"]
+        assert field["state"] == "missing"
+        assert field["reason"] == "the offer states no LD terms; the shortfall is not known"
+    stated = {"ld_rate": {"kind": "rate_per_period", "value": ["0.5", "day"], "display": "0.5% per day"}}
+    field = _lds([], "vendor-b", _Terms([_ld_term(stated)], []))["ld_shortfall"]
+    assert field["reason"] == "no back-to-back LD gap: no owner LD terms, or the offer recovers them in full"
+
+
+def test_a_computed_field_without_a_formula_is_refused():
+    with pytest.raises(ValueError, match="formula"):
+        _field("Budget variance", "computed", "EUR 1.00")
+    with pytest.raises(ValueError, match="formula"):
+        _field("Budget variance", "computed", "EUR 1.00", formula="  ")
+    assert _field("Price", "cited", "EUR 1.00", citations=[{"filename": "x.pdf"}])["state"] == "cited"

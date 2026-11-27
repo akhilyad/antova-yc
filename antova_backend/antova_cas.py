@@ -36,6 +36,8 @@ RISK_GROUPS = ("technical", "fa_conformance", "back_to_back", "budget", "missing
 NOT_KNOWN = "not known"
 NOT_STATED = "not stated in the offer"
 BUYER_ENTERED = "entered by the buyer"
+NO_FORMULA = "the stored value has no formula showing how it was worked out"
+NO_OFFER_LDS = "the offer states no LD terms; the shortfall is not known"
 CONFLICT_CODES = frozenset({"passages_disagree", "amendment_order_unknown"})
 ENGINEERING = "engineering"
 _TBE_RISK = {ComplianceStatus.DEVIATION_DOWNGRADE.value, ComplianceStatus.CONFLICT_DOWNGRADE.value,
@@ -46,6 +48,9 @@ def _field(label: str, state: str, display: str | None = None, *, citations: Ite
            formula: str = "", reason: str = "") -> dict:
     if state not in STATES:
         raise ValueError(f"unknown CAS field state {state!r}")
+    if state == "computed" and not str(formula).strip():
+        # A computed value always shows how it was worked out; a producer without one is a bug.
+        raise ValueError(f"computed CAS field {label!r} has no formula")
     if state != "missing" and (display is None or not str(display).strip()):
         # A cited, computed or inherited field always shows its value; without one it is not known.
         state, reason = "missing", f"the stored {state} value has no text to show"
@@ -143,6 +148,8 @@ def _budget_field(label: str, line: dict | None, citations: list[dict], missing_
     amount = _dec(line.get("amount"))
     if amount is None or not line.get("currency"):
         return _missing(label, line.get("reason") or NOT_KNOWN)
+    if not str(line.get("formula") or "").strip():
+        return _missing(label, NO_FORMULA)
     return _field(label, "computed", _cents(line["currency"], amount), citations=citations, formula=line["formula"])
 
 
@@ -152,8 +159,10 @@ def _money_field(label: str, money: dict | None, citations: list[dict], missing_
     amount = _dec(money.get("amount"))
     if amount is None or not money.get("currency"):
         return _missing(label, money.get("reason") or NOT_KNOWN, citations)
+    if not str(money.get("formula") or "").strip():
+        return _missing(label, NO_FORMULA, citations)
     return _field(label, "computed", _cents(money["currency"], amount), citations=citations,
-                  formula=money.get("formula") or "")
+                  formula=money["formula"])
 
 
 def _gap_field(label: str, gap: dict | None, missing_reason: str) -> dict:
@@ -162,7 +171,9 @@ def _gap_field(label: str, gap: dict | None, missing_reason: str) -> dict:
     value = _dec(gap.get("value"))
     if value is None:
         return _missing(label, gap.get("reason") or NOT_KNOWN)
-    return _field(label, "computed", f"{value} {gap['unit']}", formula=gap.get("formula") or "")
+    if not str(gap.get("formula") or "").strip():
+        return _missing(label, NO_FORMULA)
+    return _field(label, "computed", f"{value} {gap['unit']}", formula=gap["formula"])
 
 
 def _finding(findings: list[dict], finding_id: str) -> dict | None:
@@ -265,8 +276,11 @@ def _payment_bonds(body: dict, vendor_id: str, terms: _Terms) -> dict:
 
 def _lds(findings: list[dict], vendor_id: str, terms: _Terms) -> dict:
     finding = _finding(findings, f"{vendor_id}|CT-01|owner|back_to_back_ld")
+    offered = ((terms.by_id.get("CT-01") or {}).get("offered") or {}).get("values") or {}
+    no_offer_lds = finding is None and not any(offered.get(name) for name in ("ld_rate", "ld_cap"))
     shortfall = _money_field("LD recovery shortfall for the delay scenario", _first_money(finding),
                              finding["citations"] if finding else [],
+                             NO_OFFER_LDS if no_offer_lds else
                              "no back-to-back LD gap: no owner LD terms, or the offer recovers them in full")
     return {**terms.fields("CT-01"), "ld_shortfall": shortfall}
 
@@ -308,8 +322,8 @@ def _delivery(loaded, vendor_id: str, terms: "_Terms") -> dict:
         incoterm, _ = _cell_field(loaded, INCOTERM_PARAM, vendor_id, "incoterm")
         basis = schedule.arrival_basis_for_incoterm(incoterm.value if incoterm is not None else None)
         result = schedule.schedule_float(loaded.tender.project, lead, arrival_basis=basis)
-        if result.float_days is None:
-            float_field = _missing("Schedule float", result.reason, [lead_citation])
+        if result.float_days is None or not result.steps:
+            float_field = _missing("Schedule float", result.reason or NO_FORMULA, [lead_citation])
         else:
             float_field = _field("Schedule float", "computed", f"{result.float_days:+d} days",
                                  citations=[lead_citation], formula="; ".join(result.steps))

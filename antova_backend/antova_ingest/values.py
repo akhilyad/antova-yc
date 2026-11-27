@@ -962,9 +962,17 @@ def _after_decimal_comma(text: str, m: re.Match) -> bool:
     return bool(re.search(r"\d,$", text[:m.start()]))
 
 
-def _parse_rate_per_period(quote: str) -> FieldValue | None:
-    """A percentage per day or per week: (Decimal rate, "day" | "week"). A rate per month is not
-    read: a month is not a whole number of weeks, so it has no exact weekly equivalent."""
+def _rate_base(sentence: str, m: re.Match) -> str | None:
+    """What a rate is a percentage of, read from its own clause (up to the next comma, semicolon or
+    percentage): "delayed_portion" when the clause names the delayed part (as _CAP_BASIS reads a cap), else
+    None (the order or contract price, or not stated)."""
+    clause = re.split(r"[,;%]", sentence[m.end():], maxsplit=1)[0]
+    return "delayed_portion" if _CAP_BASIS[0][1].search(clause) else None
+
+
+def _rate_matches(quote: str):
+    """(sentence, rate, period, base) for the first rate per day or week in the quote; None when there is none
+    or its number cannot be read."""
     for sentence in split_sentences(quote):
         for m in _PERCENT.finditer(sentence):
             unit = _RATE_UNIT.match(sentence[m.end():])
@@ -975,9 +983,25 @@ def _parse_rate_per_period(quote: str) -> FieldValue | None:
             period = (unit.group(1) or _PERIOD_WORDS[unit.group(2).lower()]).lower()
             if period == "month":
                 continue
-            rate = Decimal(m.group(1))
-            return FieldValue("rate_per_period", (rate, period), f"{_dec_text(rate)}% per {period}")
+            return sentence, Decimal(m.group(1)), period, _rate_base(sentence, m)
     return None
+
+
+def _parse_rate_per_period(quote: str) -> FieldValue | None:
+    """A percentage per day or per week: (Decimal rate, "day" | "week"). A rate per month is not
+    read: a month is not a whole number of weeks, so it has no exact weekly equivalent. A rate of the
+    delayed portion only carries qualifier "delayed_portion"."""
+    found = _rate_matches(quote)
+    if found is None:
+        return None
+    _, rate, period, base = found
+    return FieldValue("rate_per_period", (rate, period), f"{_dec_text(rate)}% per {period}", qualifier=base)
+
+
+def delayed_rate_clause(quote: str) -> str | None:
+    """The sentence stating a rate of the delayed portion, when the quote's rate is one."""
+    found = _rate_matches(quote)
+    return found[0].strip() if found is not None and found[3] == "delayed_portion" else None
 
 
 def per_week(value: tuple[Decimal, str]) -> Decimal:

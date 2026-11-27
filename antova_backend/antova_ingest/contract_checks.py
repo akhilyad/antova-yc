@@ -33,7 +33,7 @@ from antova_ingest.contract_terms import ContractTerm, TermSource
 from antova_ingest.exposure import Exposure, _euros, _unknown, back_to_back_ld_gap
 from antova_ingest.ontology import FieldDef
 from antova_ingest.types import BaselineFx, Citation, FieldValue, OwnerTerms
-from antova_ingest.values import (EVENT_LABELS, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only,
+from antova_ingest.values import (EVENT_LABELS, delayed_rate_clause, NOT_COMPARABLE, Milestone, _dec_text, check, citation_only,
                                   ld_exclusions)
 
 Baseline = Literal["fa", "owner"]
@@ -389,11 +389,22 @@ def owner_ld_money(owner_source: TermSource | None, owner: OwnerTerms | None) ->
     return OwnerLd(per_day, cap_money, currency, tuple(steps))
 
 
+def _delayed_rate_reason(source: TermSource) -> str:
+    """Why an LD rate of the delayed portion gives no gap, quoting the clause that states it."""
+    clause = next((c for c in (delayed_rate_clause(cite.quote) for cite in source.citations) if c), None)
+    quoted = f" ('{clause}')" if clause else ""
+    return f"the LD rate applies to the delayed portion only; the delayed value is not known{quoted}"
+
+
 def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tuple[Decimal, str] | None,
                     delay_weeks, fx: Sequence[BaselineFx] = ()) -> Exposure:
     """`exposure.back_to_back_ld_gap` for one vendor's CT-01, with the owner LDs put in money and in the
     order's currency, and the delay scenario (weeks, spec 4.1) turned into days (× 7, ruling R21)."""
     kind = "back_to_back_ld"
+    owner_rate_fv = (term.owner.values.get("ld_rate")
+                     if term.owner is not None and term.owner.kind == "document" else None)
+    if owner_rate_fv is not None and owner_rate_fv.qualifier == "delayed_portion":
+        return _unknown(kind, _delayed_rate_reason(term.owner))
     money = owner_ld_money(term.owner, owner)
     if money.reason:
         return _unknown(kind, money.reason)
@@ -420,6 +431,8 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
     no_lds = (rate is None and cap is not None and cap.qualifier == "none") or (whole is not None and not stated)
     if cap is not None and cap.qualifier == "delayed_portion":
         return _unknown(kind, "the vendor's LD cap is a percentage of the delayed portion, whose value is not known")
+    if rate is not None and rate.qualifier == "delayed_portion":
+        return _unknown(kind, _delayed_rate_reason(term.offered))
     steps = list(money.steps)
     owner_rate, owner_cap, currency = money.rate_per_day, money.cap, money.currency
     if po_value is not None and po_value[1] != money.currency:

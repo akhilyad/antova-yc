@@ -12,7 +12,7 @@ from antova_ingest.contract_terms import ContractTerm, TermSource, contract_evid
 from antova_ingest.tests.helpers import evidence
 from antova_ingest.types import (BaselineFx, BaselineMoney, Citation, DocumentEntry, FieldValue, OwnerTerms,
                                  TenderManifest)
-from antova_ingest.values import Milestone
+from antova_ingest.values import Milestone, parse_field
 
 D = Decimal
 GBP_EUR = BaselineFx(from_currency="GBP", to_currency="EUR", rate=D("1.17"), dated=date(2026, 11, 1))
@@ -600,3 +600,38 @@ def test_a_coordinated_exclusion_alone_is_never_a_number():
     assert term.offered is None and len(term.ld_exclusion_passages) == 1
     gap = back_to_back_ld(term, OWNER_MONEY_LD, (D("2000000"), "EUR"), D("4"))
     assert gap.amount is None and gap.reason == "not known: the vendor's LD rate, the vendor's LD cap"
+
+
+# --- final review B: an LD rate of the delayed portion is not a rate of the whole order --------------------
+
+DELAYED_RATE = ("Liquidated damages: 0.5% of the value of the delayed portion per week of delay, "
+                "capped at 10% of the Contract Price.")
+
+
+def test_the_rate_parser_records_a_delayed_portion_base():
+    rate = parse_field("rate_per_period", DELAYED_RATE, "ld_rate")
+    assert rate.value == (D("0.5"), "week") and rate.qualifier == "delayed_portion"
+    assert parse_field("rate_per_period", "LDs: 0.2%/day of the delayed portion", "r").qualifier == "delayed_portion"
+    plain = parse_field("rate_per_period", "0.5% of the Contract Price per week of delay, capped at 10%", "ld_rate")
+    assert plain.value == (D("0.5"), "week") and plain.qualifier is None
+
+
+def test_a_vendor_rate_of_the_delayed_portion_gives_no_gap():
+    gap = _gap(DELAYED_RATE)
+    assert gap.amount is None
+    assert "the LD rate applies to the delayed portion only; the delayed value is not known" in gap.reason
+    assert "delayed portion per week" in gap.reason  # the clause is quoted
+
+
+def test_an_owner_rate_of_the_delayed_portion_gives_no_gap():
+    owner = OwnerTerms(contract_value=EUR_10M, package_ld_share_pct=D("100"))
+    term = _term("CT-01", _quoted(" LDs are 0.5% per day, capped at 10% of the order value."),
+                 owner=_quoted(DELAYED_RATE, "owner.pdf"))
+    gap = back_to_back_ld(term, owner, (D("2000000"), "EUR"), D("4"))
+    assert gap.amount is None
+    assert "the LD rate applies to the delayed portion only; the delayed value is not known" in gap.reason
+
+
+def test_a_contract_price_rate_still_gives_the_gap():
+    gap = _gap("LDs are 0.5% of the Contract Price per day of delay, capped at 10% of the order value.")
+    assert gap.amount is not None and gap.amount == _gap(RATE).amount
