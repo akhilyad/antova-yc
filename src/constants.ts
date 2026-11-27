@@ -66,9 +66,9 @@ export const STATUS_PLAIN = {
  * a real 33 kV switchgear tender, already run, no sign-up.
  */
 export const WORKBENCH_URL = (
-  (import.meta.env?.VITE_WORKBENCH_URL as string | undefined) || 'https://antova-backend-demo-antovabackend.vercel.app'
+  (import.meta.env?.VITE_WORKBENCH_URL as string | undefined) || 'https://antova-workbench.akhilfut.workers.dev'
 ).replace(/\/$/, '');
-export const SAMPLE_AUDIT_URL = `${WORKBENCH_URL}/audit/TENDER-2026-402?tab=ledger`;
+export const SAMPLE_AUDIT_URL = `${WORKBENCH_URL}/`;
 
 export const HERO_COPY = {
   eyebrow: 'Bid audits for electrical tenders',
