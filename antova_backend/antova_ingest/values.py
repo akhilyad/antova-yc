@@ -963,11 +963,20 @@ def _after_decimal_comma(text: str, m: re.Match) -> bool:
 
 
 def _rate_base(sentence: str, m: re.Match) -> str | None:
-    """What a rate is a percentage of, read from its own clause (up to the next comma, semicolon or
-    percentage): "delayed_portion" when the clause names the delayed part (as _CAP_BASIS reads a cap), else
-    None (the order or contract price, or not stated)."""
-    clause = re.split(r"[,;%]", sentence[m.end():], maxsplit=1)[0]
-    return "delayed_portion" if _CAP_BASIS[0][1].search(clause) else None
+    """What a rate is a percentage of, read from its whole sentence (as _CAP_BASIS reads a cap), leaving out
+    the clauses that state another percentage (a cap's own base). "delayed_portion" when the delayed part is
+    named, "mixed" when both it and the contract or order price are, else None (the price, or not stated)."""
+    own, at = [], 0
+    for clause in re.split(r"([,;])", sentence):
+        start, at = at, at + len(clause)
+        if start <= m.start() < at or not _PERCENT.search(clause):
+            own.append(clause)
+    text = " ".join(own)
+    delayed = _CAP_BASIS[0][1].search(text) is not None
+    contract = _CAP_BASIS[1][1].search(text) is not None
+    if delayed:
+        return "mixed" if contract else "delayed_portion"
+    return None
 
 
 def _rate_matches(quote: str):

@@ -635,3 +635,25 @@ def test_an_owner_rate_of_the_delayed_portion_gives_no_gap():
 def test_a_contract_price_rate_still_gives_the_gap():
     gap = _gap("LDs are 0.5% of the Contract Price per day of delay, capped at 10% of the order value.")
     assert gap.amount is not None and gap.amount == _gap(RATE).amount
+
+
+@pytest.mark.parametrize("quote", [
+    "0.5% per week of delay, calculated on the value of the delayed equipment.",
+    "0.5% per week, of the delayed portion.",
+    "The value of the delayed goods shall attract LDs of 0.5% per week.",
+])
+def test_a_delayed_portion_base_anywhere_in_the_sentence(quote):
+    assert parse_field("rate_per_period", quote, "ld_rate").qualifier == "delayed_portion"
+    assert _gap(quote).amount is None
+
+
+def test_delay_alone_and_the_contract_price_are_not_a_delayed_base():
+    assert parse_field("rate_per_period", "0.5% per week of the Contract Price.", "ld_rate").qualifier is None
+    assert parse_field("rate_per_period", "LDs of 0.5% per week of delay.", "ld_rate").qualifier is None
+
+
+def test_a_rate_naming_both_bases_gives_no_gap():
+    quote = "0.5% per week of the Contract Price, calculated on the value of the delayed portion."
+    assert parse_field("rate_per_period", quote, "ld_rate").qualifier == "mixed"
+    gap = _gap(quote)
+    assert gap.amount is None and "both the delayed portion and the contract price" in gap.reason

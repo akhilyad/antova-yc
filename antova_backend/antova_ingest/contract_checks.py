@@ -405,6 +405,9 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
                      if term.owner is not None and term.owner.kind == "document" else None)
     if owner_rate_fv is not None and owner_rate_fv.qualifier == "delayed_portion":
         return _unknown(kind, _delayed_rate_reason(term.owner))
+    if owner_rate_fv is not None and owner_rate_fv.qualifier == "mixed":
+        return _unknown(kind, "the owner LD rate names both the delayed portion and the contract price as its "
+                              "base; a person decides which governs")
     money = owner_ld_money(term.owner, owner)
     if money.reason:
         return _unknown(kind, money.reason)
@@ -433,6 +436,9 @@ def back_to_back_ld(term: ContractTerm, owner: OwnerTerms | None, po_value: tupl
         return _unknown(kind, "the vendor's LD cap is a percentage of the delayed portion, whose value is not known")
     if rate is not None and rate.qualifier == "delayed_portion":
         return _unknown(kind, _delayed_rate_reason(term.offered))
+    if rate is not None and rate.qualifier == "mixed":
+        return _unknown(kind, "the offer's LD rate names both the delayed portion and the contract price as its "
+                              "base; a person decides which governs")
     steps = list(money.steps)
     owner_rate, owner_cap, currency = money.rate_per_day, money.cap, money.currency
     if po_value is not None and po_value[1] != money.currency:
