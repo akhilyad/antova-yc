@@ -29,3 +29,7 @@ secrets/
 
 # Local tool state
 .superpowers/
+
+# Playwright
+/test-results/
+/playwright-report/

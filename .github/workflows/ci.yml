@@ -27,6 +27,9 @@ jobs:
       - run: bun run test
       # Same build Vercel runs for https://antova.vercel.app.
       - run: bun run build
+      # Smoke tests on that build, desktop and mobile widths.
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
 
   backend:
     name: Engine (pytest)
