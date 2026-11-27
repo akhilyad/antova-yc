@@ -5,9 +5,9 @@
 <h1 align="center">Antova</h1>
 
 <p align="center">
-  <b>The cheapest bid isn't the cheapest.</b><br/>
+  <b>The lowest bid is not always the lowest cost.</b><br/>
   Antova reads every vendor bid against your technical specification, prices what each bid leaves out,<br/>
-  and ties every flag to the page and the exact words behind it.
+  and traces every flag to the page and exact wording behind it.
 </p>
 
 <p align="center">
@@ -32,19 +32,19 @@
 
 ## 1. Problem and scope
 
-An industrial equipment tender runs to hundreds of pages per bid. The lowest quote often wins because the missing items sit in one footnote: a lower short-circuit rating, aluminium busbars where copper was specified, factory testing "charged extra", freight left out. After award they come back as change orders.
+An industrial equipment tender runs to hundreds of pages per bid. The lowest quote often wins because its omissions are buried in a single clause: a lower short-circuit rating, aluminium busbars where copper was specified, factory testing "charged extra", freight left out. After award they come back as change orders.
 
-Today a buyer's engineer finds these by hand, in a spreadsheet, under deadline. Antova automates the repetitive part and keeps the judgment with a person:
+Today a buyer's engineer finds these by hand, in a spreadsheet, under deadline. Antova automates the repetitive part and keeps the decision with a named reviewer:
 
 - **Reads** each bid for the sentence that answers each requirement, with its page and position.
 - **Checks** the values in code. Units are converted (104 °F becomes 40 °C) before they meet the spec limit.
 - **Prices** each gap from a versioned rate table. An unknown quantity is marked unpriced, never counted as zero.
-- **Halts for approval.** A named reviewer on the buyer's procurement team approves every flag before an audit is final. The award decision stays with the buyer.
+- **Requires approval.** A named reviewer on the buyer's procurement team approves every flag before an audit is final. The award decision stays with the buyer.
 
 **Supported today:** 33 kV gas-insulated switchgear (equipment class `mv_gis_switchgear`, plus an extended class `mv_gis_switchgear_ext` that adds contract-stage findings).
 **Out of scope:** OCR of scanned pages, rate ranges, currency conversion, award recommendation.
 
-**Design rule.** The model only finds quotes. It returns a page number and the verbatim words, nothing else. Every number, unit, pass/fail decision and euro amount is produced by code, and a quote that is not on its page word for word is dropped.
+**Design rule.** The model only finds quotes. It returns a page number and the verbatim words and no other content. Every number, unit, pass/fail decision and euro amount is produced by code, and a quote that is not on its page word for word is rejected.
 
 ## 2. Requirements
 
@@ -54,7 +54,7 @@ Today a buyer's engineer finds these by hand, in a spreadsheet, under deadline. 
 | :-- | :-- | :-- |
 | FR-1 | Accept a spec, vendor bid PDFs and a manifest. Reject anything that is not a readable, unencrypted PDF before it is stored. | `antova_upload_api.py` |
 | FR-2 | Locate, per requirement, the page and verbatim quote that answers it. | `antova_ingest/extract.py` |
-| FR-3 | Drop any quote that is not on its cited page word for word. | `antova_ingest/verify.py` |
+| FR-3 | Reject any quote that is not on its cited page word for word. | `antova_ingest/verify.py` |
 | FR-4 | Sweep for value-shaped sentences the model missed. | `antova_ingest/sweep.py` |
 | FR-5 | Parse numbers, units and clauses and compare them with the spec limit, with unit conversion. | `antova_ingest/values.py` (Pint) |
 | FR-6 | Resolve conflicting evidence by document type. Keep both pages when documents contradict. Mark a missing item omitted. | `antova_ingest/precedence.py`, `ontology.py` |
@@ -119,7 +119,7 @@ flowchart LR
     LP -. "links to" .-> WB
 ```
 
-The landing page has no live tool. The deployed workbench that visitors can use lives in [antova-backend-demo](https://github.com/akhilyad/antova-backend-demo).
+The landing page has no live tool. The deployed workbench available to users lives in [antova-backend-demo](https://github.com/akhilyad/antova-backend-demo).
 
 ## 4. Pipeline execution
 
@@ -142,7 +142,7 @@ sequenceDiagram
     P->>P: Parse pages into words with coordinates
     P->>L: Find page and verbatim quote per requirement
     L-->>P: Candidate quotes only
-    P->>P: Drop quotes not on the page, sweep for missed ones
+    P->>P: Reject quotes not on the page, sweep for missed ones
     P->>R: Read values, convert units, compare with spec
     R->>R: Resolve precedence, mark omissions, price gaps
     R->>D: Persist draft audit with open flags (COMPLETED)
@@ -159,7 +159,7 @@ Progress reported by the pipeline (`antova_ingest/pipeline.py`):
 | Intake | 5 | Manifest and documents are read. |
 | Parse | 20 | PDF pages become words with bounding boxes. A page with no text layer is flagged, not guessed. |
 | Locate | 60 | The model proposes a page and quote per requirement. |
-| Check each quote is on its page | 70 | `verify.py` drops quotes that are not there word for word. |
+| Check each quote is on its page | 70 | `verify.py` rejects quotes that are not there word for word. |
 | Read values | 80 | `values.py` extracts and normalises numbers and units. |
 | Check where documents disagree | 85 | `precedence.py` ranks evidence and keeps both pages on a conflict. |
 | Price | 90 | `costs.py` prices gaps from the rate table. Persist completes the job at 100. |
@@ -313,7 +313,7 @@ Accuracy on the generated edge-case packs is computed by `antova_ingest/eval.py`
 | :-- | :-- |
 | PDF is not a PDF, is encrypted, too large, or too long | Rejected at upload, nothing replaced |
 | Page has no text layer (scanned) | Flagged for manual review. OCR is not supported |
-| Model quote is not on its page | Dropped. The cell is treated as not found |
+| Model quote is not on its page | Rejected. The cell is treated as not found |
 | Model refuses, returns invalid output, or a document is too large | That bid degrades. The run continues |
 | Documents contradict each other | Both pages kept, higher evidence tier wins |
 | Item the bid never mentions | Marked omitted and priced |
@@ -327,8 +327,8 @@ Accuracy on the generated edge-case packs is computed by `antova_ingest/eval.py`
 | :-- | :-- | :-- |
 | Model finds quotes only | Verifiable, no hallucinated numbers | Recall depends on the locator and the sweep |
 | Strict warranty rule (v2) | No invented price | Some totals are lower bounds |
-| One rate per item | Simple and auditable | No rate ranges, no currency conversion |
-| One in-process worker and SQLite default | Simple to run and reason about | One instance only; Postgres needed beyond one disk |
+| One rate per item | Straightforward to audit | No rate ranges, no currency conversion |
+| One in-process worker and SQLite default | Low operational complexity | One instance only; Postgres needed beyond one disk |
 | Human approval of every flag | Audit is defensible | Throughput bounded by reviewers |
 
 ## 10. Repository layout
